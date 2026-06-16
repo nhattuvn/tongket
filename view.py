@@ -39,7 +39,9 @@ st.set_page_config(
 )
 
 
-# Inject CSS - fix cursor trên bộ lọc + style modal
+# ============================================================
+# GLOBAL CSS + MODAL (giống app.py)
+# ============================================================
 st.markdown("""
 <style>
 /* Default arrow cursor on filter widgets */
@@ -47,7 +49,6 @@ div[data-baseweb="select"] > div,
 div[data-baseweb="select"] input,
 div[data-baseweb="select"] svg,
 .stSelectbox,
-.stTextInput input,
 .stButton > button {
     cursor: default !important;
 }
@@ -55,7 +56,7 @@ div[data-baseweb="select"] * {
     cursor: default !important;
 }
 
-/* Global image modal - identical to app.py style */
+/* Global image modal */
 .image-modal {
     position: fixed;
     inset: 0;
@@ -96,12 +97,12 @@ div[data-baseweb="select"] * {
     z-index: 1000000;
 }
 
-/* Thumbnail clickable */
-.ref-image {
+/* Clickable thumbnail */
+.zoomable {
     cursor: zoom-in !important;
     transition: transform 0.15s, box-shadow 0.15s;
 }
-.ref-image:hover {
+.zoomable:hover {
     transform: scale(1.05);
     box-shadow: 0 0 0 2px #B8760A;
 }
@@ -126,9 +127,32 @@ div[data-baseweb="select"] * {
     width: 64px; height: 64px; object-fit: contain;
     border: 1px solid #E8E8E4; border-radius: 6px; background: #F7F7F5;
 }
+
+/* Gallery image */
+.gallery-card {
+    border: 1px solid #E8E8E4;
+    border-radius: 10px;
+    overflow: hidden;
+    background: white;
+    margin-bottom: 12px;
+}
+.gallery-img-wrap {
+    width: 100%;
+    aspect-ratio: 1;
+    background: #F7F7F5;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.gallery-caption {
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #1A1A1A;
+}
 </style>
 
-<!-- Global modal (same as app.py) -->
 <div id="globalImageModal" class="image-modal" aria-hidden="true">
     <button type="button" class="image-modal-close" aria-label="Close">×</button>
     <img id="globalImageModalImg" src="" alt="Full size" />
@@ -141,12 +165,11 @@ div[data-baseweb="select"] * {
         window.imageModalInitialized = true;
 
         document.addEventListener("click", (e) => {
-            const trigger = e.target.closest("[data-full], .ref-image, .zoomable");
+            const trigger = e.target.closest("[data-full], .zoomable");
             if (trigger) {
                 const modal = document.getElementById("globalImageModal");
                 const modalImg = document.getElementById("globalImageModalImg");
                 if (!modal || !modalImg) return;
-
                 const fullSrc = trigger.getAttribute("data-full") || trigger.src;
                 if (fullSrc) {
                     modalImg.src = fullSrc;
@@ -193,7 +216,9 @@ div[data-baseweb="select"] * {
 """, unsafe_allow_html=True)
 
 
-# -------------------- helpers --------------------
+# ============================================================
+# Helpers
+# ============================================================
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -226,7 +251,7 @@ def parse_year(text: str) -> int | None:
 
 
 def period_sort_key(period_label: str) -> tuple:
-    """Sort key: (year DESC, month DESC, label DESC) - newest first"""
+    """Sort: (year DESC, month DESC, label DESC) - newest first"""
     text = normalize_text(period_label).upper()
     year = parse_year(text) or 0
     months = [m for name, m in MONTH_ORDER.items() if name in text]
@@ -241,7 +266,9 @@ def image_paths_from_value(value: object) -> list[str]:
     return [part.strip() for part in raw.split("|") if part.strip()]
 
 
-# -------------------- DB --------------------
+# ============================================================
+# Database
+# ============================================================
 @st.cache_data(show_spinner=False)
 def load_entries() -> pd.DataFrame:
     if not DB_PATH.exists():
@@ -270,7 +297,6 @@ def load_entries() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_last_sync() -> str:
-    """Lấy thời gian đồng bộ mới nhất từ bảng settings."""
     if not DB_PATH.exists():
         return ""
     try:
@@ -304,7 +330,9 @@ def load_payment_info() -> str:
     return DEFAULT_PAYMENT_INFO
 
 
-# -------------------- image resolution --------------------
+# ============================================================
+# Image resolution (cross-platform)
+# ============================================================
 @st.cache_data(show_spinner=False)
 def _build_upload_filename_index() -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
@@ -369,7 +397,9 @@ def image_data_uri(path: Path) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-# -------------------- PDF (Portrait A4 + Payment) --------------------
+# ============================================================
+# PDF (Portrait A4 + Payment info)
+# ============================================================
 def calc_pdf_row_height(image_value: object, text_lines: list[str]) -> float:
     image_count = min(len(image_paths_from_value(image_value)), 6)
     image_rows = (image_count + 2) // 3 if image_count else 0
@@ -407,12 +437,11 @@ def pdf_image_grid(value: object, max_images: int = 6) -> Table | str:
 
 
 def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True) -> bytes:
-    """PDF khổ dọc A4, có Payment Info cuối file."""
+    """PDF Portrait A4, có Payment Info cuối file."""
     buffer = BytesIO()
-    # Portrait A4
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=A4,  # A4 mặc định là portrait
+        pagesize=A4,
         rightMargin=15 * mm,
         leftMargin=15 * mm,
         topMargin=15 * mm,
@@ -423,12 +452,11 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
     subtitle_style = ParagraphStyle("Subtitle", parent=styles["Normal"], fontSize=9, alignment=1, textColor=colors.HexColor("#6B7280"), spaceAfter=12)
     body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9, leading=12)
     project_style = ParagraphStyle("Project", parent=body_style, fontSize=9, leading=12)
-    period_label_style = ParagraphStyle("PeriodLabel", parent=body_style, fontSize=8, leading=10, textColor=colors.HexColor("#6B7280"))
+    period_label_style = ParagraphStyle("PeriodLabel", parent=body_style, fontSize=9, leading=11, textColor=colors.HexColor("#374151"))
     payment_style = ParagraphStyle("Payment", parent=body_style, fontSize=9, leading=13)
 
     story = []
 
-    # Title
     story.append(Paragraph(escape(title), title_style))
     total_qty = data["drawing_qty"].sum() if not data.empty else 0
     total_amount = data["amount"].sum() if not data.empty else 0
@@ -437,33 +465,32 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
         subtitle_style,
     ))
 
-    # Sort: kỳ mới nhất -> cũ nhất
     sorted_data = data.sort_values(
         ["period_year", "period_label", "source_file", "source_row", "id"],
         ascending=[False, False, True, True, True],
         na_position="last",
     ).reset_index(drop=True)
 
-    # Group by period để có header phụ
-    last_period = None
     table_rows: list = []
     row_heights: list = []
+    last_period = None
+
     for index, row in sorted_data.iterrows():
         project_name = str(row.get("project_name") or "")
         owner = normalize_text(row.get("owner"))
         desc = normalize_text(row.get("description"))
         period_label = str(row.get("period_label") or "")
 
-        # Thêm dòng period header nếu đổi period
+        # Period header row (nếu đổi period)
         if period_label != last_period:
             table_rows.append([
                 Paragraph(f"<b>📅 {escape(period_label) or '-'}</b>", period_label_style),
                 "", "", "", "", "",
             ])
-            row_heights.append(7 * mm)
+            row_heights.append(8 * mm)
             last_period = period_label
 
-        # Project content
+        # Body row
         project_parts = [f"<b>{escape(project_name)}</b>"]
         if owner:
             project_parts.append(f"<i>{escape(owner)}</i>")
@@ -484,42 +511,41 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
 
     # Total row
     table_rows.append([
-        "", Paragraph("<b>TOTAL</b>", project_style),
-        f"<b>{total_qty:g}</b>", "", f"<b>SGD {total_amount:,.0f}</b>", "",
+        "",
+        Paragraph("<b>TOTAL</b>", project_style),
+        f"<b>{total_qty:g}</b>",
+        "",
+        f"<b>SGD {total_amount:,.0f}</b>",
+        "",
     ])
     row_heights.append(9 * mm)
 
-    # Column widths: A4 portrait, usable width = 210 - 30 = 180mm
     col_widths = [10 * mm, 60 * mm, 14 * mm, 20 * mm, 24 * mm, 52 * mm]
 
     table = Table(table_rows, colWidths=col_widths, rowHeights=row_heights, repeatRows=0)
-    table.setStyle(
-        TableStyle(
-            [
-                # Header cho period label rows
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
-                ("SPAN", (0, 0), (-1, 0)),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 9),
-                # Body
-                ("FONTSIZE", (0, 1), (-1, -2), 8),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                # Number columns
-                ("ALIGN", (0, 1), (0, -1), "CENTER"),
-                ("ALIGN", (2, 1), (4, -1), "RIGHT"),
-                # Amount column highlight
-                ("BACKGROUND", (4, 1), (4, -2), colors.HexColor("#FFF7ED")),
-                ("TEXTCOLOR", (4, 1), (4, -2), colors.HexColor("#B45309")),
-                ("FONTNAME", (4, 1), (4, -2), "Helvetica-Bold"),
-                # Total row
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E5E7EB")),
-                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                # Period label rows: light bg + no border bottom
-                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F9FAFB")),
-            ]
-        )
-    )
+
+    table_style = TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("ALIGN", (2, 0), (4, -1), "RIGHT"),
+        ("BACKGROUND", (4, 0), (4, -1), colors.HexColor("#FFF7ED")),
+        ("TEXTCOLOR", (4, 0), (4, -1), colors.HexColor("#B45309")),
+        ("FONTNAME", (4, 0), (4, -1), "Helvetica-Bold"),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E5E7EB")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+    ])
+
+    # Style riêng cho period header rows
+    for i, row in enumerate(table_rows):
+        if row and hasattr(row[0], 'text') and '📅' in str(row[0].text):
+            table_style.add("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F3F4F6"))
+            table_style.add("SPAN", (0, i), (-1, i))
+            table_style.add("LINEABOVE", (0, i), (-1, i), 0.5, colors.HexColor("#9CA3AF"))
+            table_style.add("LINEBELOW", (0, i), (-1, i), 0.25, colors.HexColor("#D9D9D9"))
+
+    table.setStyle(table_style)
     story.append(table)
 
     # Payment info ở cuối
@@ -537,14 +563,15 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
     return buffer.getvalue()
 
 
-# -------------------- Period table --------------------
+# ============================================================
+# Period table render
+# ============================================================
 def render_period_table(data: pd.DataFrame) -> None:
     rows = []
     sorted_data = data.sort_values(
         ["period_label", "source_file", "source_row", "id"],
         ascending=[False, True, True, True],
         na_position="last",
-        key=lambda s: s.map(lambda x: (period_sort_key(x) if s.name == "period_label" else x)),
     ).reset_index(drop=True)
 
     for index, row in sorted_data.iterrows():
@@ -594,7 +621,9 @@ def render_period_table(data: pd.DataFrame) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
-# -------------------- Gallery --------------------
+# ============================================================
+# Gallery render
+# ============================================================
 def render_gallery(data: pd.DataFrame) -> None:
     image_rows = data[data["image_path"].fillna("").str.strip() != ""].copy()
     if image_rows.empty:
@@ -618,29 +647,36 @@ def render_gallery(data: pd.DataFrame) -> None:
             uri = image_data_uri(path)
             project = str(row.get("project_name") or "")
             period = str(row.get("period_label") or "")
+            short_project = project if len(project) <= 32 else project[:30] + "…"
             with cols[item_index % 4]:
                 st.markdown(
-                    f'<div style="text-align:center;">'
+                    f'<div class="gallery-card">'
+                    f'<div class="gallery-img-wrap">'
                     f'<img class="zoomable" src="{uri}" data-full="{escape(uri, quote=True)}" '
-                    f'style="width:100%;max-width:200px;border-radius:8px;cursor:zoom-in;border:1px solid #E8E8E4;" />'
-                    f'<div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.3;">'
-                    f'<strong>{escape(project[:30])}</strong><br/>{escape(period)}</div>'
+                    f'style="width:100%;height:100%;object-fit:contain;" />'
+                    f'</div>'
+                    f'<div class="gallery-caption">'
+                    f'<strong>{escape(short_project)}</strong><br/>'
+                    f'<span style="color:#888;font-size:11px;">{escape(period)}</span>'
+                    f'</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
             item_index += 1
 
 
-# -------------------- Filter --------------------
+# ============================================================
+# Filter
+# ============================================================
 def filter_entries(data: pd.DataFrame, keyword: str, client: str, year: str, period: str) -> pd.DataFrame:
     filtered = data.copy()
-    if client != "All" and "client_name" in filtered.columns:
+    if client and "client_name" in filtered.columns:
         filtered = filtered[filtered["client_name"] == client]
     if year != "All" and "period_year" in filtered.columns:
         filtered = filtered[filtered["period_year"].fillna(0).astype(int).astype(str) == year]
     if period != "All" and "period_label" in filtered.columns:
         filtered = filtered[filtered["period_label"] == period]
-    if keyword.strip():
+    if keyword and keyword.strip():
         query = keyword.strip().lower()
         cols = [col for col in ["client_name", "period_label", "project_name", "owner", "description", "notes"] if col in filtered.columns]
         mask = pd.Series(False, index=filtered.index)
@@ -650,7 +686,9 @@ def filter_entries(data: pd.DataFrame, keyword: str, client: str, year: str, per
     return filtered
 
 
-# -------------------- Main --------------------
+# ============================================================
+# Main
+# ============================================================
 def main() -> None:
     st.title("📊 Tong Ket Manager")
     last_sync = load_last_sync()
@@ -669,20 +707,39 @@ def main() -> None:
         st.warning("No data to display.")
         return
 
-    # ===== SIDEBAR: Cascading filter: Client → Year → Period → Search =====
+    # ============================================================
+    # SIDEBAR: Cascading filter
+    # ============================================================
     st.sidebar.header("Filters")
 
-    # 1. Client (cascading từ data)
-    clients = ["All"] + sorted([
-        value for value in data["client_name"].dropna().unique().tolist() if value
-    ])
-    # Reset các filter phía sau khi đổi client
-    if "filter_client" not in st.session_state:
-        st.session_state.filter_client = "All"
+    # 1. Client (BẮT BUỘC chọn, KHÔNG có "All")
+    all_clients = sorted([v for v in data["client_name"].dropna().unique().tolist() if v])
+    if not all_clients:
+        st.warning("No clients found.")
+        return
+
+    # Sort toàn bộ data theo period (gần -> xa) để default ổn định
+    data_sorted = data.copy()
+    data_sorted["_sort"] = data_sorted["period_label"].fillna("").map(period_sort_key)
+    data_sorted = data_sorted.sort_values(
+        ["_sort", "client_name", "source_file", "source_row", "id"],
+        ascending=[False, True, True, True, True],
+        na_position="last",
+    ).drop(columns=["_sort"], errors="ignore")
+    latest_client = data_sorted.iloc[0]["client_name"]
+
+    # Init session state
+    if "filter_client" not in st.session_state or st.session_state.filter_client not in all_clients:
+        st.session_state.filter_client = latest_client
+    if "filter_year" not in st.session_state:
+        st.session_state.filter_year = "All"
+    if "filter_period" not in st.session_state:
+        st.session_state.filter_period = "All"
+
     selected_client = st.sidebar.selectbox(
-        "Client",
-        clients,
-        index=clients.index(st.session_state.filter_client) if st.session_state.filter_client in clients else 0,
+        "Client *",
+        all_clients,
+        index=all_clients.index(st.session_state.filter_client),
         key="filter_client_widget",
     )
     if selected_client != st.session_state.filter_client:
@@ -691,16 +748,14 @@ def main() -> None:
         st.session_state.filter_period = "All"
     st.session_state.filter_client = selected_client
 
-    scoped_by_client = data if selected_client == "All" else data[
-        data["client_name"] == selected_client
-    ]
+    scoped_by_client = data[data["client_name"] == selected_client]
 
-    # 2. Year (chỉ những năm có trong client đã chọn)
+    # 2. Year
     years_avail = ["All"] + sorted(
         [str(int(v)) for v in scoped_by_client["period_year"].dropna().unique().tolist()],
         reverse=True,
     )
-    if "filter_year" not in st.session_state or st.session_state.filter_year not in years_avail:
+    if st.session_state.filter_year not in years_avail:
         st.session_state.filter_year = "All"
     selected_year = st.sidebar.selectbox(
         "Year",
@@ -724,7 +779,7 @@ def main() -> None:
         reverse=True,
     )
     periods_avail = ["All"] + period_list
-    if "filter_period" not in st.session_state or st.session_state.filter_period not in periods_avail:
+    if st.session_state.filter_period not in periods_avail:
         st.session_state.filter_period = "All"
     selected_period = st.sidebar.selectbox(
         "Period",
@@ -737,7 +792,36 @@ def main() -> None:
     # 4. Search
     keyword = st.sidebar.text_input("Search project / description", key="filter_keyword")
 
-    filtered = filter_entries(data, keyword, selected_client, selected_year, selected_period)
+    # ============================================================
+    # Auto-pick kỳ gần nhất nếu user chưa chọn Year/Period
+    # ============================================================
+    if selected_period == "All" and selected_year == "All":
+        scoped_for_latest = scoped_by_client.copy()
+        scoped_for_latest["_sort"] = scoped_for_latest["period_label"].fillna("").map(period_sort_key)
+        latest_period = None
+        if not scoped_for_latest.empty:
+            first_row = scoped_for_latest.sort_values(
+                ["_sort", "source_file", "source_row", "id"],
+                ascending=[False, True, True, True],
+                na_position="last",
+            ).iloc[0]
+            latest_period = str(first_row.get("period_label") or "")
+
+        if latest_period:
+            filtered = scoped_by_client[scoped_by_client["period_label"] == latest_period].copy()
+            st.info(f"📅 Showing latest period: **{latest_period}** (use sidebar to see others)")
+        else:
+            filtered = scoped_by_client.copy()
+    else:
+        filtered = filter_entries(data, keyword, selected_client, selected_year, selected_period)
+
+    # Sort display data
+    filtered["_sort"] = filtered["period_label"].fillna("").map(period_sort_key)
+    display_data = filtered.sort_values(
+        ["_sort", "source_file", "source_row", "id"],
+        ascending=[False, True, True, True],
+        na_position="last",
+    ).drop(columns=["_sort"], errors="ignore")
 
     # Metrics
     metric_cols = st.columns(4)
@@ -746,30 +830,22 @@ def main() -> None:
     metric_cols[2].metric("Drawings", f"{filtered['drawing_qty'].sum() if not filtered.empty else 0:g}")
     metric_cols[3].metric("Total SGD", f"{filtered['amount'].sum() if not filtered.empty else 0:,.0f}")
 
-    # ===== TABS =====
+    # ============================================================
+    # TABS
+    # ============================================================
     tab_table, tab_gallery, tab_pdf = st.tabs(["📋 Period / Data Table", "🖼️ Gallery", "📄 PDF"])
 
     with tab_table:
         if filtered.empty:
             st.info("No data matches the current filter.")
         else:
-            # Sort: kỳ gần nhất trước
-            display_data = filtered.copy()
-            display_data["_sort"] = display_data["period_label"].fillna("").map(period_sort_key)
-            display_data = display_data.sort_values(
-                ["_sort", "source_file", "source_row", "id"],
-                ascending=[False, True, True, True],
-                na_position="last",
-            ).drop(columns=["_sort"], errors="ignore")
-
-            # === Action buttons ===
-            default_title = f"{selected_client} - {selected_period}".replace("All", "Project Summary")
+            default_title = f"{selected_client} - {display_data.iloc[0].get('period_label', 'Project Summary')}"
             action_cols = st.columns([1, 1, 4])
             with action_cols[0]:
                 if st.button("👁 Preview PDF", type="primary", use_container_width=True, key="preview_pdf_table"):
                     st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(display_data, default_title)
                     st.session_state["cloud_pdf_title"] = default_title
-                    st.session_state["pdf_generated_at"] = datetime.now().strftime("%H:%M:%S")
+                    st.session_state["cloud_pdf_filename"] = f"{default_title}.pdf"
             with action_cols[1]:
                 if st.button("💾 Save PDF", use_container_width=True, key="save_pdf_table"):
                     bytes_data = make_pdf_bytes(display_data, default_title)
@@ -777,10 +853,9 @@ def main() -> None:
                     st.session_state["cloud_pdf_title"] = default_title
                     st.session_state["cloud_pdf_filename"] = f"{default_title}.pdf"
 
-            # Show download if PDF was generated
             pdf_bytes = st.session_state.get("cloud_pdf_bytes")
-            if pdf_bytes and st.session_state.get("cloud_pdf_filename"):
-                filename = st.session_state["cloud_pdf_filename"]
+            if pdf_bytes:
+                filename = st.session_state.get("cloud_pdf_filename", f"{default_title}.pdf")
                 st.download_button(
                     "⬇️ Download PDF",
                     data=pdf_bytes,
@@ -790,29 +865,20 @@ def main() -> None:
                 )
 
             st.markdown("---")
-
-            # === BẢNG DỮ LIỆU ===
             render_period_table(display_data)
 
     with tab_gallery:
-        display_gallery = filtered.copy()
-        display_gallery["_sort"] = display_gallery["period_label"].fillna("").map(period_sort_key)
-        display_gallery = display_gallery.sort_values(
-            ["_sort", "client_name", "source_file", "source_row", "id"],
-            ascending=[False, True, True, True, True],
-            na_position="last",
-        ).drop(columns=["_sort"], errors="ignore")
-        render_gallery(display_gallery)
+        render_gallery(display_data)
 
     with tab_pdf:
         st.subheader("Generate & Download PDF")
-        default_title = f"{selected_client} - {selected_period}".replace("All", "Project Summary")
+        default_title = f"{selected_client} - {display_data.iloc[0].get('period_label', 'Project Summary')}" if not display_data.empty else "Project Summary"
         title = st.text_input("PDF Title", value=default_title, key="pdf_title")
 
         pdf_col1, pdf_col2 = st.columns(2)
         with pdf_col1:
-            if st.button("🔄 Generate PDF", type="primary", use_container_width=True, key="gen_pdf_tab", disabled=filtered.empty):
-                st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(filtered, title)
+            if st.button("🔄 Generate PDF", type="primary", use_container_width=True, key="gen_pdf_tab", disabled=display_data.empty):
+                st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(display_data, title)
                 st.session_state["cloud_pdf_title"] = title
                 st.session_state["cloud_pdf_filename"] = f"{title}.pdf"
         with pdf_col2:
