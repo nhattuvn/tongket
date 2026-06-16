@@ -320,8 +320,15 @@ def extract_sheet_images(path: Path, sheet, client_name: str) -> dict[int, list[
                     pil_image.save(output_path, format="JPEG", quality=82, optimize=True)
             except Exception:
                 continue
-        image_map.setdefault(row_number, []).append(str(output_path))
+        # LƯU RELATIVE PATH (cross-platform)
+        try:
+            rel_path = output_path.relative_to(APP_DIR)
+            stored = str(rel_path).replace("\\", "/")
+        except ValueError:
+            stored = str(output_path)
+        image_map.setdefault(row_number, []).append(stored)
     return image_map
+
 
 
 def is_header_row(row: tuple[object, ...]) -> bool:
@@ -354,27 +361,41 @@ def build_source_key(path: Path, root: Path, sheet_title: str, row_index: int) -
     return f"{path_key}|{sheet_title}|{row_index}"
 
 
-def migrate_absolute_source_keys(conn: sqlite3.Connection, root: Path) -> int:
-    rows = conn.execute(
-        """
-        SELECT id, source_key, source_file, source_sheet, source_row
-        FROM entries
-        WHERE source_key NOT LIKE 'manual|%'
-          AND COALESCE(source_file, '') <> ''
-          AND COALESCE(source_sheet, '') <> ''
-          AND source_row IS NOT NULL
-        """
-    ).fetchall()
+def migrate_absolute_image_paths() -> int:
+    """Chuyển image_path từ tuyệt đối Windows -> relative so với APP_DIR.
+    Chạy 1 lần để sửa các bản ghi đã import trước đó."""
     migrated = 0
-    for entry_id, source_key, source_file, source_sheet, source_row in rows:
-        new_key = build_source_key(Path(source_file), root, str(source_sheet), int(source_row))
-        if new_key == source_key:
-            continue
-        try:
-            conn.execute("UPDATE entries SET source_key = ? WHERE id = ?", (new_key, entry_id))
-            migrated += 1
-        except sqlite3.IntegrityError:
-            continue
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, image_path FROM entries "
+            "WHERE image_path LIKE '%\\%' OR image_path LIKE 'D:%' "
+            "OR image_path LIKE 'C:%' OR image_path LIKE 'E:%'"
+        ).fetchall()
+        for entry_id, image_path in rows:
+            if not image_path:
+                continue
+            new_parts: list[str] = []
+            changed = False
+            for part in image_path.split("|"):
+                part = part.strip()
+                if not part:
+                    continue
+                normalized = part.replace("\\", "/")
+                p = Path(normalized)
+                parts_lower = [x.lower() for x in p.parts]
+                if "uploads" in parts_lower:
+                    idx = parts_lower.index("uploads")
+                    rel = "/".join(p.parts[idx + 1:])
+                    new_parts.append(f"uploads/{rel}")
+                    changed = True
+                else:
+                    new_parts.append(part)
+            if changed:
+                new_value = "|".join(new_parts)
+                conn.execute("UPDATE entries SET image_path = ? WHERE id = ?", (new_value, entry_id))
+                migrated += 1
+    if migrated:
+        clear_entries_cache()
     return migrated
 
 
@@ -1539,9 +1560,16 @@ def save_uploaded_images(uploaded_files: list[object]) -> list[str]:
             thumb = image.convert("RGB")
             thumb.thumbnail((320, 320))
             thumb.save(thumb_path, format="JPEG", quality=82, optimize=True)
-        st.session_state.saved_uploads[upload_key] = str(thumb_path)
-        saved_paths.append(str(thumb_path))
+                # LƯU RELATIVE PATH (cross-platform)
+        try:
+            rel_thumb = thumb_path.relative_to(APP_DIR)
+            stored = str(rel_thumb).replace("\\", "/")
+        except ValueError:
+            stored = str(thumb_path)
+        st.session_state.saved_uploads[upload_key] = stored
+        saved_paths.append(st.session_state.saved_uploads[upload_key])
     return saved_paths
+
 
 
 def display_metrics(data: pd.DataFrame) -> None:
@@ -3933,6 +3961,11 @@ def _settings_backup() -> None:
 def main() -> None:
     st.set_page_config(page_title="Tong Ket Manager", page_icon="📁", layout="wide")
     inject_app_css()
+    # Chuẩn hóa image path cũ (Windows absolute) -> relative
+    _migrated = migrate_absolute_image_paths()
+    if _migrated:
+        st.toast(f"🔧 Đã chuẩn hóa {_migrated} image path.", icon="🔧")
+
     # Daily auto-backup
     _backup_result = auto_backup_db()
     if _backup_result:
