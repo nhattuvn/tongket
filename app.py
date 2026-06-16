@@ -320,15 +320,8 @@ def extract_sheet_images(path: Path, sheet, client_name: str) -> dict[int, list[
                     pil_image.save(output_path, format="JPEG", quality=82, optimize=True)
             except Exception:
                 continue
-        # LƯU RELATIVE PATH (cross-platform)
-        try:
-            rel_path = output_path.relative_to(APP_DIR)
-            stored = str(rel_path).replace("\\", "/")
-        except ValueError:
-            stored = str(output_path)
-        image_map.setdefault(row_number, []).append(stored)
+        image_map.setdefault(row_number, []).append(str(output_path))
     return image_map
-
 
 
 def is_header_row(row: tuple[object, ...]) -> bool:
@@ -397,7 +390,6 @@ def migrate_absolute_image_paths() -> int:
     if migrated:
         clear_entries_cache()
     return migrated
-
 
 def discover_excel_rows(
     root: Path,
@@ -1560,16 +1552,9 @@ def save_uploaded_images(uploaded_files: list[object]) -> list[str]:
             thumb = image.convert("RGB")
             thumb.thumbnail((320, 320))
             thumb.save(thumb_path, format="JPEG", quality=82, optimize=True)
-                # LƯU RELATIVE PATH (cross-platform)
-        try:
-            rel_thumb = thumb_path.relative_to(APP_DIR)
-            stored = str(rel_thumb).replace("\\", "/")
-        except ValueError:
-            stored = str(thumb_path)
-        st.session_state.saved_uploads[upload_key] = stored
-        saved_paths.append(st.session_state.saved_uploads[upload_key])
+        st.session_state.saved_uploads[upload_key] = str(thumb_path)
+        saved_paths.append(str(thumb_path))
     return saved_paths
-
 
 
 def display_metrics(data: pd.DataFrame) -> None:
@@ -3961,11 +3946,10 @@ def _settings_backup() -> None:
 def main() -> None:
     st.set_page_config(page_title="Tong Ket Manager", page_icon="📁", layout="wide")
     inject_app_css()
-    # Chuẩn hóa image path cũ (Windows absolute) -> relative
+    # Chuẩn hóa image path cũ -> relative
     _migrated = migrate_absolute_image_paths()
     if _migrated:
         st.toast(f"🔧 Đã chuẩn hóa {_migrated} image path.", icon="🔧")
-
     # Daily auto-backup
     _backup_result = auto_backup_db()
     if _backup_result:
