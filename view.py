@@ -1,223 +1,347 @@
-import sqlite3
+from __future__ import annotations
+
 import base64
+import mimetypes
+import sqlite3
+from html import escape
+from io import BytesIO
 from pathlib import Path
-from datetime import datetime
+
 import pandas as pd
 import streamlit as st
-from PIL import Image
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Image as RLImage
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-# Cấu hình trang hiển thị của Streamlit
-st.set_page_config(
-    page_title="Tong Ket Manager - Chế độ Xem",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
-# Đường dẫn thư mục dữ liệu (Đảm bảo đồng bộ với GitHub)
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "tong_ket.db"
 UPLOAD_DIR = APP_DIR / "uploads"
 
-# -------------------------------------------------------------------------
-# HÀM KẾT NỐI VÀ LẤY DỮ LIỆU (CHỈ ĐỌC)
-# -------------------------------------------------------------------------
-def load_data_from_db():
-    """Kết nối cơ sở dữ liệu SQLite và lấy toàn bộ dữ liệu bảng entries"""
-    if not DB_PATH.exists():
-        st.error(f"❌ Không tìm thấy file cơ sở dữ liệu `tong_ket.db` tại {DB_PATH}. Hãy đảm bảo bạn đã push file này lên GitHub.")
-        return pd.DataFrame()
-    
+
+st.set_page_config(
+    page_title="Tong Ket Manager - View",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def normalize_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\xa0", " ").strip()
+
+
+def uppercase_label(value: object) -> str:
+    return normalize_text(value).upper()
+
+
+def number_or_zero(value: object) -> float:
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        # Sử dụng thuộc tính chỉ đọc để tăng tính an toàn trên Cloud
-        query = "SELECT * FROM entries"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-        return df
-    except Exception as e:
-        st.error(f"Lỗi khi đọc cơ sở dữ liệu: {e}")
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def load_entries() -> pd.DataFrame:
+    if not DB_PATH.exists():
+        st.error("Không tìm thấy `tong_ket.db`. Hãy đồng bộ database lên GitHub trước.")
         return pd.DataFrame()
 
-# -------------------------------------------------------------------------
-# HÀM TẠO BÁO CÁO PDF TRỰC TUYẾN (Dựa trên cấu trúc ReportLab sẵn có)
-# -------------------------------------------------------------------------
-def make_pdf_bytes(df_data, title_name):
-    """Tạo file PDF và trả về dữ liệu dạng Bytes để preview thay vì lưu ra ổ cứng"""
-    from io import BytesIO
-    from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib import colors
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
+        data = pd.read_sql_query("SELECT * FROM entries WHERE deleted_at IS NULL", conn)
+        conn.close()
+    except Exception as exc:
+        st.error(f"Lỗi khi đọc database: {exc}")
+        return pd.DataFrame()
 
+    for column in ["client_name", "project_name", "owner"]:
+        if column in data.columns:
+            data[column] = data[column].fillna("").map(uppercase_label)
+    if "period_label" in data.columns:
+        data["period_label"] = data["period_label"].fillna("").map(normalize_text)
+    if "period_year" in data.columns:
+        data["period_year"] = pd.to_numeric(data["period_year"], errors="coerce")
+    for column in ["drawing_qty", "unit_price", "amount"]:
+        if column in data.columns:
+            data[column] = pd.to_numeric(data[column], errors="coerce").fillna(0)
+    return data
+
+
+def image_paths_from_value(value: object) -> list[str]:
+    raw = normalize_text(value)
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split("|") if part.strip()]
+
+
+def resolve_image_path(value: object) -> Path | None:
+    path_text = normalize_text(value)
+    if not path_text:
+        return None
+
+    path = Path(path_text)
+    candidates = []
+    if path.is_absolute():
+        candidates.append(path)
+        try:
+            uploads_index = [part.lower() for part in path.parts].index("uploads")
+            candidates.append(UPLOAD_DIR.joinpath(*path.parts[uploads_index + 1 :]))
+        except ValueError:
+            pass
+    else:
+        candidates.extend([APP_DIR / path, UPLOAD_DIR / path, UPLOAD_DIR / path.name])
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def image_data_uri(path: Path) -> str:
+    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def render_images(value: object, max_images: int = 8) -> str:
+    cells = []
+    for path_text in image_paths_from_value(value)[:max_images]:
+        path = resolve_image_path(path_text)
+        if not path:
+            continue
+        uri = image_data_uri(path)
+        cells.append(f'<img class="thumb" src="{uri}" alt="image" />')
+    if not cells:
+        return ""
+    return '<div class="image-grid">' + "".join(cells) + "</div>"
+
+
+def filter_entries(data: pd.DataFrame, keyword: str, client: str, year: str, period: str) -> pd.DataFrame:
+    filtered = data.copy()
+    if client != "Tất cả" and "client_name" in filtered.columns:
+        filtered = filtered[filtered["client_name"] == client]
+    if year != "Tất cả" and "period_year" in filtered.columns:
+        filtered = filtered[filtered["period_year"].fillna(0).astype(int).astype(str) == year]
+    if period != "Tất cả" and "period_label" in filtered.columns:
+        filtered = filtered[filtered["period_label"] == period]
+    if keyword.strip():
+        query = keyword.strip().lower()
+        cols = [col for col in ["client_name", "period_label", "project_name", "owner", "description", "notes"] if col in filtered.columns]
+        mask = pd.Series(False, index=filtered.index)
+        for col in cols:
+            mask = mask | filtered[col].fillna("").astype(str).str.lower().str.contains(query, regex=False)
+        filtered = filtered[mask]
+    return filtered
+
+
+def pdf_image_grid(value: object, max_images: int = 6) -> Table | str:
+    images = []
+    for path_text in image_paths_from_value(value)[:max_images]:
+        path = resolve_image_path(path_text)
+        if not path:
+            continue
+        try:
+            image = RLImage(str(path))
+            image._restrictSize(14 * mm, 14 * mm)
+            images.append(image)
+        except Exception:
+            continue
+    if not images:
+        return ""
+    rows = [images[index : index + 3] for index in range(0, len(images), 3)]
+    for row in rows:
+        while len(row) < 3:
+            row.append("")
+    table = Table(rows, colWidths=[15 * mm, 15 * mm, 15 * mm])
+    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    return table
+
+
+def make_pdf_bytes(data: pd.DataFrame, title: str) -> bytes:
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=15, leftMargin=15, topMargin=15, bottomMargin=15)
-    story = []
-    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=12 * mm, leftMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        leading=22,
-        textColor=colors.HexColor('#1E3A8A'),
-        alignment=1 # Center
+    title_style = ParagraphStyle("Title", parent=styles["Heading1"], fontSize=15, leading=18, alignment=1)
+    body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=7.5, leading=9)
+
+    story = [Paragraph(escape(title.upper()), title_style), Spacer(1, 8)]
+    rows = [["No", "Period", "Project", "Qty", "Unit", "Amount", "Image"]]
+    sorted_data = data.sort_values(["period_year", "period_label", "source_file", "source_row", "id"], ascending=[False, False, True, True, True], na_position="last")
+    for index, row in sorted_data.reset_index(drop=True).iterrows():
+        project_parts = [f"<b>{escape(str(row.get('project_name') or ''))}</b>"]
+        owner = normalize_text(row.get("owner"))
+        desc = normalize_text(row.get("description"))
+        if owner:
+            project_parts.append(escape(owner))
+        if desc:
+            project_parts.append(escape(desc).replace("\n", "<br/>"))
+        rows.append(
+            [
+                str(index + 1),
+                Paragraph(escape(str(row.get("period_label") or "")), body_style),
+                Paragraph("<br/>".join(project_parts), body_style),
+                f"{number_or_zero(row.get('drawing_qty')):g}",
+                f"SGD {number_or_zero(row.get('unit_price')):,.0f}",
+                f"SGD {number_or_zero(row.get('amount')):,.0f}",
+                pdf_image_grid(row.get("image_path")),
+            ]
+        )
+
+    total_qty = data["drawing_qty"].sum() if "drawing_qty" in data.columns else 0
+    total_amount = data["amount"].sum() if "amount" in data.columns else 0
+    rows.append(["", "", Paragraph("<b>TOTAL</b>", body_style), f"{total_qty:g}", "", f"SGD {total_amount:,.0f}", ""])
+
+    table = Table(rows, colWidths=[10 * mm, 30 * mm, 65 * mm, 14 * mm, 23 * mm, 25 * mm, 48 * mm], repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2D2D2D")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D9D9")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (3, 1), (5, -1), "RIGHT"),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F3F4F6")),
+            ]
+        )
     )
-    
-    # Tiêu đề báo cáo
-    story.append(Paragraph(f"BÁO CÁO TỔNG KẾT: {title_name.upper()}", title_style))
-    story.append(Spacer(1, 15))
-    
-    # Tạo bảng dữ liệu (Đơn giản hóa để xuất PDF trên Cloud)
-    # Bạn có thể giữ nguyên hàm make_pdf gốc của bạn nếu nó trả về bytes.
-    table_data = [[ "Dự án", "Người phụ trách", "Mô tả", "Thành tiền (SGD)" ]]
-    for _, row in df_data.iterrows():
-        table_data.append([
-            str(row.get('project_name', '')),
-            str(row.get('owner', '')),
-            str(row.get('description', '')),
-            f"{row.get('amount_sgd', 0):,.2f}" if 'amount_sgd' in row else "0.00"
-        ])
-        
-    t = Table(table_data, colWidths=[120, 100, 220, 100])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2563EB')),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-        ('ALIGN', (-1,0), (-1,-1), 'RIGHT'),
-        ('BOTTOMPADDING', (0,0), (-1,0), 8),
-        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#F3F4F6')),
-        ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#E5E7EB')),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,0), 10),
-    ]))
-    
-    story.append(t)
+    story.append(table)
     doc.build(story)
-    
     buffer.seek(0)
     return buffer.getvalue()
 
-# -------------------------------------------------------------------------
-# GIAO DIỆN CHÍNH (MAIN APP)
-# -------------------------------------------------------------------------
-st.title("📊 Hệ Thống Quản Lý Tổng Kết (Chế độ xem Internet)")
-st.caption("Ứng dụng chạy trên Streamlit Cloud - Dữ liệu cập nhật từ máy tính cá nhân")
 
-# Tải dữ liệu
-df_raw = load_data_from_db()
-
-if not df_raw.empty:
-    # Xử lý chuẩn hóa chữ hoa như bản local của bạn
-    if "project_name" in df_raw.columns:
-        df_raw["project_name"] = df_raw["project_name"].astype(str).str.upper()
-    if "client_name" in df_raw.columns:
-        df_raw["client_name"] = df_raw["client_name"].astype(str).str.upper()
-    if "owner" in df_raw.columns:
-        df_raw["owner"] = df_raw["owner"].astype(str).str.upper()
-
-    # -------------------------------------------------------------------------
-    # BỘ LỌC TÌM KIẾM (SIDEBAR)
-    # -------------------------------------------------------------------------
-    st.sidebar.header("🔍 Bộ lọc tìm kiếm")
-    
-    # Lọc theo Công ty / Khách hàng
-    all_clients = ["TẤT CẢ"] + sorted(df_raw["client_name"].unique().tolist()) if "client_name" in df_raw.columns else ["TẤT CẢ"]
-    selected_client = st.sidebar.selectbox("Công ty / Khách hàng", all_clients)
-    
-    # Lọc theo Dự án
-    all_projects = ["TẤT CẢ"] + sorted(df_raw["project_name"].unique().tolist()) if "project_name" in df_raw.columns else ["TẤT CẢ"]
-    selected_project = st.sidebar.selectbox("Tên dự án", all_projects)
-    
-    # Lọc theo Người phụ trách
-    all_owners = ["TẤT CẢ"] + sorted(df_raw["owner"].unique().tolist()) if "owner" in df_raw.columns else ["TẤT CẢ"]
-    selected_owner = st.sidebar.selectbox("Người phụ trách (Owner)", all_owners)
-    
-    # Tìm kiếm theo mô tả
-    search_desc = st.sidebar.text_input("Tìm trong mô tả công việc")
-
-    # Thực thi lọc dữ liệu
-    df_filtered = df_raw.copy()
-    if selected_client != "TẤT CẢ":
-        df_filtered = df_filtered[df_filtered["client_name"] == selected_client]
-    if selected_project != "TẤT CẢ":
-        df_filtered = df_filtered[df_filtered["project_name"] == selected_project]
-    if selected_owner != "TẤT CẢ":
-        df_filtered = df_filtered[df_filtered["owner"] == selected_owner]
-    if search_desc:
-        df_filtered = df_filtered[df_filtered["description"].astype(str).str.contains(search_desc, case=False, na=False)]
-
-    # -------------------------------------------------------------------------
-    # HIỂN THỊ METRICS THỐNG KÊ (BENTO STYLE)
-    # -------------------------------------------------------------------------
-    st.subheader("📈 Thống kê nhanh")
-    col1, col2, col3 = st.columns(3)
-    
-    total_records = len(df_filtered)
-    total_amount = df_filtered["amount_sgd"].sum() if "amount_sgd" in df_filtered.columns else 0.0
-    distinct_projects = df_filtered["project_name"].nunique() if "project_name" in df_filtered.columns else 0
-    
-    col1.metric("Tổng số đầu mục", f"{total_records} mục")
-    col2.metric("Tổng doanh thu (SGD)", f"${total_amount:,.2f}")
-    col3.metric("Số lượng dự án", f"{distinct_projects} dự án")
-
-    # -------------------------------------------------------------------------
-    # BẢNG DỮ LIỆU CHI TIẾT
-    # -------------------------------------------------------------------------
-    st.subheader("📋 Danh sách chi tiết công việc")
-    st.dataframe(
-        df_filtered,
-        use_container_width=True,
-        hide_index=True
+def render_period_table(data: pd.DataFrame) -> None:
+    rows = []
+    sorted_data = data.sort_values(["source_file", "source_row", "id"], na_position="last").reset_index(drop=True)
+    for index, row in sorted_data.iterrows():
+        owner = normalize_text(row.get("owner"))
+        desc = normalize_text(row.get("description"))
+        owner_html = f'<span class="owner"> · {escape(owner)}</span>' if owner else ""
+        desc_html = f'<div class="desc">{escape(desc).replace(chr(10), "<br/>")}</div>' if desc else ""
+        rows.append(
+            "<tr>"
+            f"<td>{index + 1}</td>"
+            f"<td><strong>{escape(str(row.get('project_name') or ''))}</strong>{owner_html}{desc_html}</td>"
+            f"<td class='num'>{number_or_zero(row.get('drawing_qty')):g}</td>"
+            f"<td class='num'>SGD {number_or_zero(row.get('unit_price')):,.0f}</td>"
+            f"<td class='num amount'>SGD {number_or_zero(row.get('amount')):,.0f}</td>"
+            f"<td>{render_images(row.get('image_path'))}</td>"
+            "</tr>"
+        )
+    rows.append(
+        "<tr class='total'>"
+        "<td></td><td>TOTAL</td>"
+        f"<td class='num'>{data['drawing_qty'].sum():g}</td><td></td>"
+        f"<td class='num amount'>SGD {data['amount'].sum():,.0f}</td><td></td>"
+        "</tr>"
     )
+    html = """
+    <style>
+    .period-table{width:100%;border-collapse:collapse;font-size:14px;}
+    .period-table th{background:#2D2D2D;color:white;padding:10px;text-align:left;position:sticky;top:0;}
+    .period-table td{border-bottom:1px solid #E8E8E4;padding:10px;vertical-align:top;}
+    .period-table .num{text-align:right;white-space:nowrap;}
+    .period-table .amount{font-weight:700;color:#B8760A;}
+    .period-table .owner,.period-table .desc{color:#6B7280;font-size:12px;}
+    .period-table .desc{margin-top:5px;line-height:1.35;}
+    .period-table .total td{background:#F7F7F5;font-weight:700;}
+    .image-grid{display:grid;grid-template-columns:repeat(3,58px);gap:5px;}
+    .thumb{width:58px;height:58px;object-fit:contain;border:1px solid #E8E8E4;border-radius:6px;background:#F7F7F5;}
+    </style>
+    <table class="period-table">
+      <thead><tr><th>No</th><th>Project</th><th>Qty</th><th>Unit</th><th>Amount</th><th>Image</th></tr></thead>
+      <tbody>
+    """ + "".join(rows) + "</tbody></table>"
+    st.markdown(html, unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # XỬ LÝ XEM ẢNH ĐÍNH KÈM (Nếu có đường dẫn ảnh)
-    # -------------------------------------------------------------------------
-    if "image_path" in df_filtered.columns:
-        st.subheader("🖼️ Hình ảnh minh chứng đính kèm")
-        df_with_images = df_filtered[df_filtered["image_path"].notna() & (df_filtered["image_path"] != "")]
-        
-        if not df_with_images.empty:
-            # Tạo lưới hiển thị ảnh (3 cột)
-            img_cols = st.columns(4)
-            for idx, (_, row) in enumerate(df_with_images.iterrows()):
-                local_img_path = UPLOAD_DIR / Path(row["image_path"]).name
-                col_to_use = img_cols[idx % 4]
-                
-                if local_img_path.exists():
-                    try:
-                        img = Image.open(local_img_path)
-                        col_to_use.image(img, caption=f"Dự án: {row.get('project_name','')}", use_container_width=True)
-                    except:
-                        col_to_use.warning("Không thể đọc định dạng ảnh")
-                else:
-                    col_to_use.info(f"Ảnh chưa đồng bộ: {local_img_path.name}")
+
+def main() -> None:
+    st.title("📊 Tong Ket Manager")
+    st.caption("Chế độ Cloud read-only. Dữ liệu cập nhật sau khi Local app đồng bộ lên GitHub.")
+
+    data = load_entries()
+    if data.empty:
+        st.warning("Chưa có dữ liệu để hiển thị.")
+        return
+
+    st.sidebar.header("Bộ lọc")
+    clients = ["Tất cả"] + sorted([value for value in data["client_name"].dropna().unique().tolist() if value])
+    years = ["Tất cả"] + sorted([str(int(value)) for value in data["period_year"].dropna().unique().tolist()], reverse=True)
+    periods_source = data.copy()
+
+    selected_client = st.sidebar.selectbox("Công ty", clients)
+    selected_year = st.sidebar.selectbox("Năm", years)
+    if selected_client != "Tất cả":
+        periods_source = periods_source[periods_source["client_name"] == selected_client]
+    if selected_year != "Tất cả":
+        periods_source = periods_source[periods_source["period_year"].fillna(0).astype(int).astype(str) == selected_year]
+    periods = ["Tất cả"] + sorted([value for value in periods_source["period_label"].dropna().unique().tolist() if value], reverse=True)
+    selected_period = st.sidebar.selectbox("Kỳ", periods)
+    keyword = st.sidebar.text_input("Tìm dự án / mô tả")
+
+    filtered = filter_entries(data, keyword, selected_client, selected_year, selected_period)
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Dòng", f"{len(filtered):,}")
+    metric_cols[1].metric("Dự án", f"{filtered['project_name'].nunique() if not filtered.empty else 0:,}")
+    metric_cols[2].metric("Drawings", f"{filtered['drawing_qty'].sum() if not filtered.empty else 0:g}")
+    metric_cols[3].metric("Tổng SGD", f"{filtered['amount'].sum() if not filtered.empty else 0:,.0f}")
+
+    tab_table, tab_gallery, tab_pdf = st.tabs(["Kỳ / Bảng dữ liệu", "Hình ảnh", "PDF"])
+
+    with tab_table:
+        if filtered.empty:
+            st.info("Không có dữ liệu phù hợp bộ lọc.")
         else:
-            st.info("Không có hình ảnh nào đính kèm trong danh sách đang lọc.")
+            render_period_table(filtered)
 
-    # -------------------------------------------------------------------------
-    # XUẤT VÀ PREVIEW BÁO CÁO PDF TRỰC TUYẾN
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📄 Xuất báo cáo PDF trực tuyến")
-    
-    pdf_title = st.text_input("Tiêu đề báo cáo xuất ra:", value=f"Bao_Cao_{selected_client}")
-    
-    if st.button("👁️ Xem trước (Preview) và Tải PDF", type="primary", use_container_width=True, disabled=df_filtered.empty):
-        with st.spinner("Đang khởi tạo cấu trúc PDF..."):
-            try:
-                pdf_bytes = make_pdf_bytes(df_filtered, pdf_title)
-                st.session_state["cloud_pdf_preview"] = pdf_bytes
-                st.toast("Tạo bản xem trước thành công!", icon="✅")
-            except Exception as pdf_err:
-                st.error(f"Lỗi khi dựng PDF bằng ReportLab: {pdf_err}")
+    with tab_gallery:
+        image_rows = filtered[filtered["image_path"].fillna("").str.strip() != ""] if "image_path" in filtered.columns else pd.DataFrame()
+        if image_rows.empty:
+            st.info("Không có hình ảnh trong dữ liệu đang lọc.")
+        else:
+            cols = st.columns(4)
+            item_index = 0
+            for _, row in image_rows.iterrows():
+                for path_text in image_paths_from_value(row.get("image_path")):
+                    path = resolve_image_path(path_text)
+                    if not path:
+                        continue
+                    with cols[item_index % 4]:
+                        st.image(str(path), caption=f"{row.get('project_name')} · {row.get('period_label')}", use_container_width=True)
+                    item_index += 1
 
-    # Nhúng iFrame hiển thị PDF trực tiếp nếu nút bấm đã được kích hoạt
-    pdf_data = st.session_state.get("cloud_pdf_preview")
-    if pdf_data:
-        b64_pdf = base64.b64encode(pdf_data).decode('utf-8')
-        pdf_display = f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="800px" style="border:1px solid #E5E7EB; border-radius:8px;"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
-else:
-    st.warning("Cơ sở dữ liệu đang trống hoặc chưa được đồng bộ chính xác.")
+    with tab_pdf:
+        title = st.text_input("Tiêu đề PDF", value=f"{selected_client} - {selected_period}".replace("Tất cả", "Project Summary"))
+        if st.button("Tạo preview PDF", type="primary", disabled=filtered.empty, use_container_width=True):
+            st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(filtered, title)
+        pdf_bytes = st.session_state.get("cloud_pdf_bytes")
+        if pdf_bytes:
+            st.download_button(
+                "Tải PDF",
+                data=pdf_bytes,
+                file_name=f"{title}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            b64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+            st.markdown(
+                f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="800" '
+                'style="border:1px solid #E5E7EB;border-radius:8px;"></iframe>',
+                unsafe_allow_html=True,
+            )
+
+
+if __name__ == "__main__":
+    main()

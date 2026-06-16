@@ -5,6 +5,7 @@ import sqlite3
 import base64
 import json
 import mimetypes
+import subprocess
 from datetime import date, datetime
 from html import escape
 from io import BytesIO
@@ -3605,9 +3606,10 @@ def display_image_gallery_panel(data: pd.DataFrame) -> None:
 
 def display_settings_panel(data: pd.DataFrame) -> None:
     st.markdown("### ⚙️ Cài đặt")
-    tab_company, tab_import, tab_payment, tab_backup, tab_trash = st.tabs([
+    tab_company, tab_import, tab_sync, tab_payment, tab_backup, tab_trash = st.tabs([
         "🏢 Công ty & Owners",
         "📥 Import dữ liệu",
+        "☁️ Đồng bộ",
         "💰 Thanh toán",
         "💾 Backup",
         "🗑 Thùng rác",
@@ -3616,6 +3618,8 @@ def display_settings_panel(data: pd.DataFrame) -> None:
         _settings_company(data)
     with tab_import:
         _settings_import()
+    with tab_sync:
+        _settings_sync()
     with tab_payment:
         _settings_payment()
     with tab_backup:
@@ -3715,6 +3719,84 @@ def _settings_import() -> None:
                 clear_entries_cache()
                 st.toast(f"✅ Đã import/cập nhật {count} dòng từ Excel.", icon="🚀")
                 st.rerun()
+
+
+def run_git_command(args: list[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=APP_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+
+    output = "\n".join(part.strip() for part in [result.stdout, result.stderr] if part and part.strip())
+    return result.returncode == 0, output or "(không có output)"
+
+
+def _settings_sync() -> None:
+    st.caption("Đồng bộ dữ liệu local lên GitHub để app Cloud read-only cập nhật theo nhánh main.")
+    tracked_targets = [
+        "app.py",
+        "view.py",
+        "requirements.txt",
+        ".gitignore",
+        "tong_ket.db",
+        "uploads",
+    ]
+
+    with st.container(border=True):
+        st.markdown("##### ☁️ Đồng bộ lên Internet")
+        status_ok, status_output = run_git_command(["status", "--short"])
+        remote_ok, remote_output = run_git_command(["remote", "-v"])
+        branch_ok, branch_output = run_git_command(["branch", "--show-current"])
+
+        if branch_ok:
+            st.caption(f"Nhánh hiện tại: `{branch_output.strip() or '-'}`")
+        if remote_ok:
+            st.code(remote_output, language="text")
+        if status_ok:
+            st.text_area("Thay đổi đang chờ đồng bộ", value=status_output, height=160, disabled=True)
+        else:
+            st.error(status_output)
+
+        commit_message = st.text_input(
+            "Nội dung commit",
+            value=f"Sync data {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            key="sync_commit_message",
+        )
+
+        if st.button("Đồng bộ lên Internet", type="primary", width="stretch", key="sync_to_github"):
+            if not commit_message.strip():
+                st.error("Cần nhập nội dung commit.")
+                return
+
+            steps: list[tuple[str, bool, str]] = []
+            for args in [
+                ["add", *tracked_targets],
+                ["commit", "-m", commit_message.strip()],
+                ["push", "origin", "main"],
+            ]:
+                ok, output = run_git_command(args)
+                steps.append(("git " + " ".join(args), ok, output))
+                if not ok:
+                    # Nothing to commit is acceptable: still push, because remote may lag.
+                    if args[0] == "commit" and "nothing to commit" in output.lower():
+                        continue
+                    break
+
+            for command, ok, output in steps:
+                st.markdown(("✅" if ok else "⚠️") + f" `{command}`")
+                st.code(output, language="text")
+
+            if steps and steps[-1][0].startswith("git push") and steps[-1][1]:
+                st.toast("☁️ Đã đồng bộ lên GitHub. Streamlit Cloud sẽ tự cập nhật.", icon="✅")
+            else:
+                st.warning("Đồng bộ chưa hoàn tất. Xem output phía trên để biết bước bị lỗi.")
 
 
 def _settings_payment() -> None:
