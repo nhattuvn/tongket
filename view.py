@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import re
 import sqlite3
+from datetime import datetime
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -22,6 +24,12 @@ APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "tong_ket.db"
 UPLOAD_DIR = APP_DIR / "uploads"
 
+DEFAULT_PAYMENT_INFO = """Payment methods: Bank transfer
+Bank name: Asia Commercial Joint Stock Bank (ACB - A Chau Bank)
+Account number: 196653719
+Full name: LUONG NHAT TU
+Swift code: ASCBVNVX"""
+
 
 st.set_page_config(
     page_title="Tong Ket Manager - View",
@@ -29,6 +37,160 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+# Inject CSS - fix cursor trên bộ lọc + style modal
+st.markdown("""
+<style>
+/* Default arrow cursor on filter widgets */
+div[data-baseweb="select"] > div,
+div[data-baseweb="select"] input,
+div[data-baseweb="select"] svg,
+.stSelectbox,
+.stTextInput input,
+.stButton > button {
+    cursor: default !important;
+}
+div[data-baseweb="select"] * {
+    cursor: default !important;
+}
+
+/* Global image modal - identical to app.py style */
+.image-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 999999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    cursor: zoom-out;
+}
+.image-modal.is-open { display: flex; }
+.image-modal img {
+    max-width: min(96vw, 1400px);
+    max-height: 92vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6);
+    background: #000;
+}
+.image-modal-close {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 48px;
+    height: 48px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    font-size: 30px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000000;
+}
+
+/* Thumbnail clickable */
+.ref-image {
+    cursor: zoom-in !important;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.ref-image:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 2px #B8760A;
+}
+
+/* Period table */
+.period-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.period-table th {
+    background: #2D2D2D; color: white; padding: 10px;
+    text-align: left; position: sticky; top: 0;
+}
+.period-table td {
+    border-bottom: 1px solid #E8E8E4; padding: 10px;
+    vertical-align: top; line-height: 1.4;
+}
+.period-table .num { text-align: right; white-space: nowrap; }
+.period-table .amount { font-weight: 700; color: #B8760A; }
+.period-table .owner { color: #6B7280; font-size: 12px; }
+.period-table .desc { color: #6B7280; font-size: 12px; margin-top: 5px; line-height: 1.35; }
+.period-table .total td { background: #F7F7F5; font-weight: 700; }
+.image-grid { display: grid; grid-template-columns: repeat(3, 64px); gap: 5px; }
+.image-grid img {
+    width: 64px; height: 64px; object-fit: contain;
+    border: 1px solid #E8E8E4; border-radius: 6px; background: #F7F7F5;
+}
+</style>
+
+<!-- Global modal (same as app.py) -->
+<div id="globalImageModal" class="image-modal" aria-hidden="true">
+    <button type="button" class="image-modal-close" aria-label="Close">×</button>
+    <img id="globalImageModalImg" src="" alt="Full size" />
+</div>
+
+<script>
+(function() {
+    const initModal = () => {
+        if (window.imageModalInitialized) return;
+        window.imageModalInitialized = true;
+
+        document.addEventListener("click", (e) => {
+            const trigger = e.target.closest("[data-full], .ref-image, .zoomable");
+            if (trigger) {
+                const modal = document.getElementById("globalImageModal");
+                const modalImg = document.getElementById("globalImageModalImg");
+                if (!modal || !modalImg) return;
+
+                const fullSrc = trigger.getAttribute("data-full") || trigger.src;
+                if (fullSrc) {
+                    modalImg.src = fullSrc;
+                    modal.classList.add("is-open");
+                    modal.setAttribute("aria-hidden", "false");
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }
+        }, true);
+
+        document.addEventListener("click", (e) => {
+            const modal = document.getElementById("globalImageModal");
+            if (!modal || !modal.classList.contains("is-open")) return;
+            if (e.target.closest(".image-modal-close") || e.target === modal) {
+                modal.classList.remove("is-open");
+                modal.setAttribute("aria-hidden", "true");
+                const modalImg = document.getElementById("globalImageModalImg");
+                if (modalImg) setTimeout(() => { modalImg.src = ""; }, 300);
+            }
+        }, true);
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                const modal = document.getElementById("globalImageModal");
+                if (modal && modal.classList.contains("is-open")) {
+                    modal.classList.remove("is-open");
+                    modal.setAttribute("aria-hidden", "true");
+                    const modalImg = document.getElementById("globalImageModalImg");
+                    if (modalImg) setTimeout(() => { modalImg.src = ""; }, 300);
+                }
+            }
+        }, true);
+    };
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initModal);
+    } else {
+        initModal();
+    }
+    setInterval(initModal, 1500);
+})();
+</script>
+""", unsafe_allow_html=True)
 
 
 # -------------------- helpers --------------------
@@ -64,7 +226,7 @@ def parse_year(text: str) -> int | None:
 
 
 def period_sort_key(period_label: str) -> tuple:
-    """Sort key: (year DESC, month DESC, label DESC) -> gần nhất trước"""
+    """Sort key: (year DESC, month DESC, label DESC) - newest first"""
     text = normalize_text(period_label).upper()
     year = parse_year(text) or 0
     months = [m for name, m in MONTH_ORDER.items() if name in text]
@@ -72,19 +234,25 @@ def period_sort_key(period_label: str) -> tuple:
     return (year, month, text)
 
 
+def image_paths_from_value(value: object) -> list[str]:
+    raw = normalize_text(value)
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split("|") if part.strip()]
+
+
 # -------------------- DB --------------------
 @st.cache_data(show_spinner=False)
 def load_entries() -> pd.DataFrame:
     if not DB_PATH.exists():
-        st.error("Không tìm thấy `tong_ket.db`. Hãy đồng bộ database lên GitHub trước.")
+        st.error("Database not found. Please sync database to GitHub first.")
         return pd.DataFrame()
-
     try:
         conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
         data = pd.read_sql_query("SELECT * FROM entries WHERE deleted_at IS NULL", conn)
         conn.close()
     except Exception as exc:
-        st.error(f"Lỗi khi đọc database: {exc}")
+        st.error(f"Error reading database: {exc}")
         return pd.DataFrame()
 
     for column in ["client_name", "project_name", "owner"]:
@@ -100,7 +268,43 @@ def load_entries() -> pd.DataFrame:
     return data
 
 
-# -------------------- image resolution (cross-platform) --------------------
+@st.cache_data(show_spinner=False)
+def load_last_sync() -> str:
+    """Lấy thời gian đồng bộ mới nhất từ bảng settings."""
+    if not DB_PATH.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'last_import_summary'"
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            summary = json.loads(row[0])
+            return str(summary.get("imported_at", ""))
+    except Exception:
+        pass
+    return ""
+
+
+@st.cache_data(show_spinner=False)
+def load_payment_info() -> str:
+    if not DB_PATH.exists():
+        return DEFAULT_PAYMENT_INFO
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'payment_info'"
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        pass
+    return DEFAULT_PAYMENT_INFO
+
+
+# -------------------- image resolution --------------------
 @st.cache_data(show_spinner=False)
 def _build_upload_filename_index() -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
@@ -116,11 +320,9 @@ def resolve_image_path(value: object) -> Path | None:
     path_text = normalize_text(value)
     if not path_text:
         return None
-
     normalized = path_text.replace("\\", "/")
     path = Path(normalized)
     filename = path.name
-
     candidates: list[Path] = []
 
     is_windows_style = (
@@ -167,30 +369,20 @@ def image_data_uri(path: Path) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def image_paths_from_value(value: object) -> list[str]:
-    raw = normalize_text(value)
-    if not raw:
-        return []
-    return [part.strip() for part in raw.split("|") if part.strip()]
+# -------------------- PDF (Portrait A4 + Payment) --------------------
+def calc_pdf_row_height(image_value: object, text_lines: list[str]) -> float:
+    image_count = min(len(image_paths_from_value(image_value)), 6)
+    image_rows = (image_count + 2) // 3 if image_count else 0
+    height_from_images = (image_rows * 22 * mm) + (6 * mm) if image_rows else 0
+
+    wrapped = 0
+    for line in text_lines:
+        text = normalize_text(line)
+        wrapped += max(1, (len(text) // 32) + 1) if text else 1
+    height_from_text = max(1, wrapped) * 4.5 * mm + (6 * mm)
+    return max(20 * mm, height_from_images, height_from_text)
 
 
-# -------------------- HTML render với click-to-zoom --------------------
-def render_images(value: object, max_images: int = 8) -> str:
-    cells = []
-    paths_found: list[Path] = []
-    for path_text in image_paths_from_value(value)[:max_images]:
-        path = resolve_image_path(path_text)
-        if not path:
-            continue
-        uri = image_data_uri(path)
-        paths_found.append(path)
-        cells.append(f'<img class="thumb" src="{uri}" alt="image" data-idx="{len(paths_found)-1}" />')
-    if not cells:
-        return ""
-    return '<div class="image-grid">' + "".join(cells) + "</div>"
-
-
-# -------------------- PDF --------------------
 def pdf_image_grid(value: object, max_images: int = 6) -> Table | str:
     images = []
     for path_text in image_paths_from_value(value)[:max_images]:
@@ -199,7 +391,7 @@ def pdf_image_grid(value: object, max_images: int = 6) -> Table | str:
             continue
         try:
             image = RLImage(str(path))
-            image._restrictSize(14 * mm, 14 * mm)
+            image._restrictSize(20 * mm, 20 * mm)
             images.append(image)
         except Exception:
             continue
@@ -209,77 +401,151 @@ def pdf_image_grid(value: object, max_images: int = 6) -> Table | str:
     for row in rows:
         while len(row) < 3:
             row.append("")
-    table = Table(rows, colWidths=[15 * mm, 15 * mm, 15 * mm])
-    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    table = Table(rows, colWidths=[22 * mm, 22 * mm, 22 * mm], rowHeights=[22 * mm] * len(rows))
+    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (-1, -1), "CENTER")]))
     return table
 
 
-def make_pdf_bytes(data: pd.DataFrame, title: str) -> bytes:
+def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True) -> bytes:
+    """PDF khổ dọc A4, có Payment Info cuối file."""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=12 * mm, leftMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
+    # Portrait A4
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,  # A4 mặc định là portrait
+        rightMargin=15 * mm,
+        leftMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+    )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("Title", parent=styles["Heading1"], fontSize=15, leading=18, alignment=1)
-    body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=7.5, leading=9)
+    title_style = ParagraphStyle("Title", parent=styles["Heading1"], fontSize=18, leading=22, alignment=1, spaceAfter=4)
+    subtitle_style = ParagraphStyle("Subtitle", parent=styles["Normal"], fontSize=9, alignment=1, textColor=colors.HexColor("#6B7280"), spaceAfter=12)
+    body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9, leading=12)
+    project_style = ParagraphStyle("Project", parent=body_style, fontSize=9, leading=12)
+    period_label_style = ParagraphStyle("PeriodLabel", parent=body_style, fontSize=8, leading=10, textColor=colors.HexColor("#6B7280"))
+    payment_style = ParagraphStyle("Payment", parent=body_style, fontSize=9, leading=13)
 
-    story = [Paragraph(escape(title.upper()), title_style), Spacer(1, 8)]
-    rows = [["No", "Period", "Project", "Qty", "Unit", "Amount", "Image"]]
+    story = []
+
+    # Title
+    story.append(Paragraph(escape(title), title_style))
+    total_qty = data["drawing_qty"].sum() if not data.empty else 0
+    total_amount = data["amount"].sum() if not data.empty else 0
+    story.append(Paragraph(
+        f"Total drawings: <b>{total_qty:g}</b> &nbsp;|&nbsp; Total amount: <b>SGD {total_amount:,.2f}</b>",
+        subtitle_style,
+    ))
+
+    # Sort: kỳ mới nhất -> cũ nhất
     sorted_data = data.sort_values(
         ["period_year", "period_label", "source_file", "source_row", "id"],
         ascending=[False, False, True, True, True],
         na_position="last",
-    )
-    for index, row in sorted_data.reset_index(drop=True).iterrows():
-        project_parts = [f"<b>{escape(str(row.get('project_name') or ''))}</b>"]
+    ).reset_index(drop=True)
+
+    # Group by period để có header phụ
+    last_period = None
+    table_rows: list = []
+    row_heights: list = [10 * mm]  # header
+    for index, row in sorted_data.iterrows():
+        project_name = str(row.get("project_name") or "")
         owner = normalize_text(row.get("owner"))
         desc = normalize_text(row.get("description"))
+        period_label = str(row.get("period_label") or "")
+
+        # Thêm dòng period header nếu đổi period
+        if period_label != last_period:
+            table_rows.append([
+                Paragraph(f"<b>📅 {escape(period_label) or '-'}</b>", period_label_style),
+                "", "", "", "", "",
+            ])
+            row_heights.append(7 * mm)
+            last_period = period_label
+
+        # Project content
+        project_parts = [f"<b>{escape(project_name)}</b>"]
         if owner:
-            project_parts.append(escape(owner))
+            project_parts.append(f"<i>{escape(owner)}</i>")
         if desc:
-            project_parts.append(escape(desc).replace("\n", "<br/>"))
-        rows.append(
-            [
-                str(index + 1),
-                Paragraph(escape(str(row.get("period_label") or "")), body_style),
-                Paragraph("<br/>".join(project_parts), body_style),
-                f"{number_or_zero(row.get('drawing_qty')):g}",
-                f"SGD {number_or_zero(row.get('unit_price')):,.0f}",
-                f"SGD {number_or_zero(row.get('amount')):,.0f}",
-                pdf_image_grid(row.get("image_path")),
-            ]
-        )
+            project_parts.append(f"<font size=8 color='#6B7280'>{escape(desc).replace(chr(10), '<br/>')}</font>")
+        project_html = "<br/>".join(project_parts)
+        text_for_height = f"{project_name} {owner} {desc}"
 
-    total_qty = data["drawing_qty"].sum() if "drawing_qty" in data.columns else 0
-    total_amount = data["amount"].sum() if "amount" in data.columns else 0
-    rows.append(["", "", Paragraph("<b>TOTAL</b>", body_style), f"{total_qty:g}", "", f"SGD {total_amount:,.0f}", ""])
+        table_rows.append([
+            str(index + 1),
+            Paragraph(project_html, project_style),
+            f"{number_or_zero(row.get('drawing_qty')):g}",
+            f"SGD {number_or_zero(row.get('unit_price')):,.0f}",
+            f"SGD {number_or_zero(row.get('amount')):,.0f}",
+            pdf_image_grid(row.get("image_path")),
+        ])
+        row_heights.append(calc_pdf_row_height(row.get("image_path"), [text_for_height]))
 
-    table = Table(rows, colWidths=[10 * mm, 30 * mm, 65 * mm, 14 * mm, 23 * mm, 25 * mm, 48 * mm], repeatRows=1)
+    # Total row
+    table_rows.append([
+        "", Paragraph("<b>TOTAL</b>", project_style),
+        f"<b>{total_qty:g}</b>", "", f"<b>SGD {total_amount:,.0f}</b>", "",
+    ])
+    row_heights.append(9 * mm)
+
+    # Column widths: A4 portrait, usable width = 210 - 30 = 180mm
+    col_widths = [10 * mm, 60 * mm, 14 * mm, 20 * mm, 24 * mm, 52 * mm]
+
+    table = Table(table_rows, colWidths=col_widths, rowHeights=row_heights, repeatRows=0)
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2D2D2D")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                # Header cho period label rows
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
+                ("SPAN", (0, 0), (-1, 0)),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D9D9")),
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
+                # Body
+                ("FONTSIZE", (0, 1), (-1, -2), 8),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (3, 1), (5, -1), "RIGHT"),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F3F4F6")),
+                # Number columns
+                ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                ("ALIGN", (2, 1), (4, -1), "RIGHT"),
+                # Amount column highlight
+                ("BACKGROUND", (4, 1), (4, -2), colors.HexColor("#FFF7ED")),
+                ("TEXTCOLOR", (4, 1), (4, -2), colors.HexColor("#B45309")),
+                ("FONTNAME", (4, 1), (4, -2), "Helvetica-Bold"),
+                # Total row
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E5E7EB")),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                # Period label rows: light bg + no border bottom
+                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F9FAFB")),
             ]
         )
     )
     story.append(table)
+
+    # Payment info ở cuối
+    if include_payment:
+        story.append(Spacer(1, 10 * mm))
+        story.append(Paragraph("<b>Payment Information</b>", styles["Heading3"]))
+        story.append(Spacer(1, 3 * mm))
+        payment = load_payment_info()
+        for line in payment.splitlines():
+            if line.strip():
+                story.append(Paragraph(escape(line), payment_style))
+
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 
-# -------------------- Period table với modal click-to-zoom --------------------
+# -------------------- Period table --------------------
 def render_period_table(data: pd.DataFrame) -> None:
-    """Hiển thị bảng dữ liệu kỳ với ảnh click-to-zoom."""
     rows = []
-    sorted_data = data.sort_values(["source_file", "source_row", "id"], na_position="last").reset_index(drop=True)
-    
-    image_store: list[str] = []  # lưu URI ảnh đầy đủ cho JS
+    sorted_data = data.sort_values(
+        ["period_label", "source_file", "source_row", "id"],
+        ascending=[False, True, True, True],
+        na_position="last",
+        key=lambda s: s.map(lambda x: (period_sort_key(x) if s.name == "period_label" else x)),
+    ).reset_index(drop=True)
 
     for index, row in sorted_data.iterrows():
         owner = normalize_text(row.get("owner"))
@@ -287,7 +553,6 @@ def render_period_table(data: pd.DataFrame) -> None:
         owner_html = f'<span class="owner"> · {escape(owner)}</span>' if owner else ""
         desc_html = f'<div class="desc">{escape(desc).replace(chr(10), "<br/>")}</div>' if desc else ""
 
-        # Build image cells
         img_html_parts = []
         for path_text in image_paths_from_value(row.get("image_path"))[:8]:
             path = resolve_image_path(path_text)
@@ -295,7 +560,7 @@ def render_period_table(data: pd.DataFrame) -> None:
                 continue
             uri = image_data_uri(path)
             img_html_parts.append(
-                f'<img class="thumb" src="{uri}" data-uri="{escape(uri, quote=True)}" />'
+                f'<img class="zoomable" src="{uri}" data-full="{escape(uri, quote=True)}" />'
             )
         img_html = '<div class="image-grid">' + "".join(img_html_parts) + "</div>" if img_html_parts else ""
 
@@ -318,95 +583,24 @@ def render_period_table(data: pd.DataFrame) -> None:
         "</tr>"
     )
 
-    # Modal + JS click-to-zoom
     html = f"""
-    <style>
-    .period-table{{width:100%;border-collapse:collapse;font-size:14px;}}
-    .period-table th{{background:#2D2D2D;color:white;padding:10px;text-align:left;position:sticky;top:0;}}
-    .period-table td{{border-bottom:1px solid #E8E8E4;padding:10px;vertical-align:top;}}
-    .period-table .num{{text-align:right;white-space:nowrap;}}
-    .period-table .amount{{font-weight:700;color:#B8760A;}}
-    .period-table .owner,.period-table .desc{{color:#6B7280;font-size:12px;}}
-    .period-table .desc{{margin-top:5px;line-height:1.35;}}
-    .period-table .total td{{background:#F7F7F5;font-weight:700;}}
-    .image-grid{{display:grid;grid-template-columns:repeat(3,58px);gap:5px;}}
-    .thumb{{
-        width:58px;height:58px;object-fit:contain;
-        border:1px solid #E8E8E4;border-radius:6px;background:#F7F7F5;
-        cursor:zoom-in;transition:transform 0.15s;
-    }}
-    .thumb:hover{{transform:scale(1.05);border-color:#B8760A;}}
-    /* Modal */
-    .img-modal{{
-        display:none;position:fixed;inset:0;z-index:999999;
-        background:rgba(0,0,0,0.9);align-items:center;justify-content:center;
-        padding:24px;cursor:zoom-out;
-    }}
-    .img-modal.open{{display:flex;}}
-    .img-modal img{{
-        max-width:96vw;max-height:92vh;object-fit:contain;
-        border-radius:8px;box-shadow:0 20px 80px rgba(0,0,0,0.6);background:#000;
-    }}
-    .img-modal-close{{
-        position:fixed;top:18px;right:20px;width:48px;height:48px;
-        border:0;border-radius:50%;background:rgba(255,255,255,0.2);
-        color:white;font-size:30px;cursor:pointer;
-        display:flex;align-items:center;justify-content:center;
-    }}
-    </style>
     <table class="period-table">
       <thead><tr><th>No</th><th>Project</th><th>Qty</th><th>Unit</th><th>Amount</th><th>Image</th></tr></thead>
       <tbody>
         {"".join(rows)}
       </tbody>
     </table>
-    <div id="imgModal" class="img-modal" onclick="closeModal()">
-        <button class="img-modal-close" onclick="closeModal();event.stopPropagation();">×</button>
-        <img id="imgModalImg" src="" />
-    </div>
-    <script>
-    (function() {{
-        function openModal(src) {{
-            var m = document.getElementById('imgModal');
-            var i = document.getElementById('imgModalImg');
-            if (m && i) {{
-                i.src = src;
-                m.classList.add('open');
-            }}
-        }}
-        function closeModal() {{
-            var m = document.getElementById('imgModal');
-            if (m) m.classList.remove('open');
-        }}
-        // expose
-        window.openImgModal = openModal;
-        window.closeModal = closeModal;
-        // event delegation
-        document.addEventListener('click', function(e) {{
-            var t = e.target.closest('.thumb');
-            if (t && t.dataset.uri) {{
-                e.preventDefault();
-                e.stopPropagation();
-                openModal(t.dataset.uri);
-            }}
-        }}, true);
-        document.addEventListener('keydown', function(e) {{
-            if (e.key === 'Escape') closeModal();
-        }});
-    }})();
-    </script>
     """
     st.markdown(html, unsafe_allow_html=True)
 
 
-# -------------------- Gallery với sort gần nhất + click-to-zoom --------------------
+# -------------------- Gallery --------------------
 def render_gallery(data: pd.DataFrame) -> None:
     image_rows = data[data["image_path"].fillna("").str.strip() != ""].copy()
     if image_rows.empty:
-        st.info("Không có hình ảnh trong dữ liệu đang lọc.")
+        st.info("No images in the current filter.")
         return
 
-    # Sort theo period gần nhất -> xa nhất
     image_rows["_sort"] = image_rows["period_label"].fillna("").map(period_sort_key)
     image_rows = image_rows.sort_values(
         ["_sort", "client_name", "source_file", "source_row", "id"],
@@ -416,98 +610,35 @@ def render_gallery(data: pd.DataFrame) -> None:
 
     cols = st.columns(4)
     item_index = 0
-    image_uris: list[dict] = []
     for _, row in image_rows.iterrows():
         for path_text in image_paths_from_value(row.get("image_path")):
             path = resolve_image_path(path_text)
             if not path:
                 continue
             uri = image_data_uri(path)
-            image_uris.append({
-                "uri": uri,
-                "project": str(row.get("project_name") or ""),
-                "client": str(row.get("client_name") or ""),
-                "period": str(row.get("period_label") or ""),
-            })
+            project = str(row.get("project_name") or "")
+            period = str(row.get("period_label") or "")
             with cols[item_index % 4]:
-                st.image(str(path), caption=f"{row.get('project_name')} · {row.get('period_label')}")
+                st.markdown(
+                    f'<div style="text-align:center;">'
+                    f'<img class="zoomable" src="{uri}" data-full="{escape(uri, quote=True)}" '
+                    f'style="width:100%;max-width:200px;border-radius:8px;cursor:zoom-in;border:1px solid #E8E8E4;" />'
+                    f'<div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.3;">'
+                    f'<strong>{escape(project[:30])}</strong><br/>{escape(period)}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
             item_index += 1
-
-    # JS overlay để click ảnh phóng to
-    if image_uris:
-        import json
-        uris_json = json.dumps(image_uris, ensure_ascii=False)
-        st.markdown(f"""
-        <div id="gModal" class="img-modal" onclick="closeG()">
-            <button class="img-modal-close" onclick="closeG();event.stopPropagation();">×</button>
-            <img id="gModalImg" src="" />
-        </div>
-        <script>
-        (function() {{
-            var data = {uris_json};
-            function openG(src) {{
-                var m = document.getElementById('gModal');
-                var i = document.getElementById('gModalImg');
-                if (m && i) {{ i.src = src; m.classList.add('open'); }}
-            }}
-            function closeG() {{
-                var m = document.getElementById('gModal');
-                if (m) m.classList.remove('open');
-            }}
-            window.openG = openG;
-            window.closeG = closeG;
-            document.addEventListener('click', function(e) {{
-                // Streamlit st.image renders as <img>, attach handler
-                var imgs = document.querySelectorAll('img[alt]');
-                imgs.forEach(function(img) {{
-                    if (!img.dataset.gBound) {{
-                        img.dataset.gBound = '1';
-                        img.style.cursor = 'zoom-in';
-                        img.addEventListener('click', function() {{
-                            // tìm URI tương ứng
-                            for (var k = 0; k < data.length; k++) {{
-                                if (data[k].uri === img.src) {{
-                                    openG(data[k].uri);
-                                    break;
-                                }}
-                            }}
-                        }}, true);
-                    }}
-                }});
-            }}, true);
-            document.addEventListener('keydown', function(e) {{
-                if (e.key === 'Escape') closeG();
-            }});
-        }})();
-        </script>
-        <style>
-        .img-modal {{
-            display:none;position:fixed;inset:0;z-index:999999;
-            background:rgba(0,0,0,0.9);align-items:center;justify-content:center;
-            padding:24px;cursor:zoom-out;
-        }}
-        .img-modal.open {{display:flex;}}
-        .img-modal img {{
-            max-width:96vw;max-height:92vh;object-fit:contain;
-            border-radius:8px;box-shadow:0 20px 80px rgba(0,0,0,0.6);background:#000;
-        }}
-        .img-modal-close {{
-            position:fixed;top:18px;right:20px;width:48px;height:48px;
-            border:0;border-radius:50%;background:rgba(255,255,255,0.2);
-            color:white;font-size:30px;cursor:pointer;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
 
 
 # -------------------- Filter --------------------
 def filter_entries(data: pd.DataFrame, keyword: str, client: str, year: str, period: str) -> pd.DataFrame:
     filtered = data.copy()
-    if client != "Tất cả" and "client_name" in filtered.columns:
+    if client != "All" and "client_name" in filtered.columns:
         filtered = filtered[filtered["client_name"] == client]
-    if year != "Tất cả" and "period_year" in filtered.columns:
+    if year != "All" and "period_year" in filtered.columns:
         filtered = filtered[filtered["period_year"].fillna(0).astype(int).astype(str) == year]
-    if period != "Tất cả" and "period_label" in filtered.columns:
+    if period != "All" and "period_label" in filtered.columns:
         filtered = filtered[filtered["period_label"] == period]
     if keyword.strip():
         query = keyword.strip().lower()
@@ -522,62 +653,105 @@ def filter_entries(data: pd.DataFrame, keyword: str, client: str, year: str, per
 # -------------------- Main --------------------
 def main() -> None:
     st.title("📊 Tong Ket Manager")
-    st.caption("Chế độ Cloud read-only. Dữ liệu cập nhật sau khi Local app đồng bộ lên GitHub.")
+    last_sync = load_last_sync()
+    if last_sync:
+        try:
+            sync_dt = datetime.fromisoformat(last_sync)
+            sync_str = sync_dt.strftime("%Y-%m-%d %H:%M:%S")
+            st.caption(f"📅 Last sync: **{sync_str}** (from local app → GitHub)")
+        except Exception:
+            st.caption(f"📅 Last sync: **{last_sync}**")
+    else:
+        st.caption("📅 No sync information available.")
 
     data = load_entries()
     if data.empty:
-        st.warning("Chưa có dữ liệu để hiển thị.")
+        st.warning("No data to display.")
         return
 
-    # ===== SIDEBAR: Ưu tiên Năm → Công ty → Kỳ → Tìm =====
-    st.sidebar.header("Bộ lọc")
+    # ===== SIDEBAR: Cascading filter: Client → Year → Period → Search =====
+    st.sidebar.header("Filters")
 
-    # 1. Năm
-    years = ["Tất cả"] + sorted(
-        [str(int(value)) for value in data["period_year"].dropna().unique().tolist()],
+    # 1. Client (cascading từ data)
+    clients = ["All"] + sorted([
+        value for value in data["client_name"].dropna().unique().tolist() if value
+    ])
+    # Reset các filter phía sau khi đổi client
+    if "filter_client" not in st.session_state:
+        st.session_state.filter_client = "All"
+    selected_client = st.sidebar.selectbox(
+        "Client",
+        clients,
+        index=clients.index(st.session_state.filter_client) if st.session_state.filter_client in clients else 0,
+        key="filter_client_widget",
+    )
+    if selected_client != st.session_state.filter_client:
+        st.session_state.filter_client = selected_client
+        st.session_state.filter_year = "All"
+        st.session_state.filter_period = "All"
+    st.session_state.filter_client = selected_client
+
+    scoped_by_client = data if selected_client == "All" else data[
+        data["client_name"] == selected_client
+    ]
+
+    # 2. Year (chỉ những năm có trong client đã chọn)
+    years_avail = ["All"] + sorted(
+        [str(int(v)) for v in scoped_by_client["period_year"].dropna().unique().tolist()],
         reverse=True,
     )
-    selected_year = st.sidebar.selectbox("Năm", years, key="filter_year")
-
-    # 2. Công ty (lọc theo năm)
-    scoped_by_year = data if selected_year == "Tất cả" else data[
-        data["period_year"].fillna(0).astype(int).astype(str) == selected_year
-    ]
-    clients = ["Tất cả"] + sorted([
-        value for value in scoped_by_year["client_name"].dropna().unique().tolist() if value
-    ])
-    selected_client = st.sidebar.selectbox("Công ty", clients, key="filter_client")
-
-    # 3. Kỳ (lọc theo năm + công ty, sort gần nhất -> xa nhất)
-    scoped = scoped_by_year if selected_client == "Tất cả" else scoped_by_year[
-        scoped_by_year["client_name"] == selected_client
-    ]
-    period_list = sorted(
-        [value for value in scoped["period_label"].dropna().unique().tolist() if value],
-        key=period_sort_key,
-        reverse=True,  # gần nhất -> xa nhất
+    if "filter_year" not in st.session_state or st.session_state.filter_year not in years_avail:
+        st.session_state.filter_year = "All"
+    selected_year = st.sidebar.selectbox(
+        "Year",
+        years_avail,
+        index=years_avail.index(st.session_state.filter_year),
+        key="filter_year_widget",
     )
-    periods = ["Tất cả"] + period_list
-    selected_period = st.sidebar.selectbox("Kỳ", periods, key="filter_period")
+    if selected_year != st.session_state.filter_year:
+        st.session_state.filter_year = selected_year
+        st.session_state.filter_period = "All"
+    st.session_state.filter_year = selected_year
 
-    # 4. Tìm dự án / mô tả
-    keyword = st.sidebar.text_input("Tìm dự án / mô tả", key="filter_keyword")
+    scoped_by_year = scoped_by_client if selected_year == "All" else scoped_by_client[
+        scoped_by_client["period_year"].fillna(0).astype(int).astype(str) == selected_year
+    ]
+
+    # 3. Period (sort gần nhất -> xa nhất)
+    period_list = sorted(
+        [v for v in scoped_by_year["period_label"].dropna().unique().tolist() if v],
+        key=period_sort_key,
+        reverse=True,
+    )
+    periods_avail = ["All"] + period_list
+    if "filter_period" not in st.session_state or st.session_state.filter_period not in periods_avail:
+        st.session_state.filter_period = "All"
+    selected_period = st.sidebar.selectbox(
+        "Period",
+        periods_avail,
+        index=periods_avail.index(st.session_state.filter_period),
+        key="filter_period_widget",
+    )
+    st.session_state.filter_period = selected_period
+
+    # 4. Search
+    keyword = st.sidebar.text_input("Search project / description", key="filter_keyword")
 
     filtered = filter_entries(data, keyword, selected_client, selected_year, selected_period)
 
     # Metrics
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Dòng", f"{len(filtered):,}")
-    metric_cols[1].metric("Dự án", f"{filtered['project_name'].nunique() if not filtered.empty else 0:,}")
+    metric_cols[0].metric("Rows", f"{len(filtered):,}")
+    metric_cols[1].metric("Projects", f"{filtered['project_name'].nunique() if not filtered.empty else 0:,}")
     metric_cols[2].metric("Drawings", f"{filtered['drawing_qty'].sum() if not filtered.empty else 0:g}")
-    metric_cols[3].metric("Tổng SGD", f"{filtered['amount'].sum() if not filtered.empty else 0:,.0f}")
+    metric_cols[3].metric("Total SGD", f"{filtered['amount'].sum() if not filtered.empty else 0:,.0f}")
 
     # ===== TABS =====
-    tab_table, tab_gallery, tab_pdf = st.tabs(["Kỳ / Bảng dữ liệu", "Hình ảnh", "PDF"])
+    tab_table, tab_gallery, tab_pdf = st.tabs(["📋 Period / Data Table", "🖼️ Gallery", "📄 PDF"])
 
     with tab_table:
         if filtered.empty:
-            st.info("Không có dữ liệu phù hợp bộ lọc.")
+            st.info("No data matches the current filter.")
         else:
             # Sort: kỳ gần nhất trước
             display_data = filtered.copy()
@@ -588,21 +762,39 @@ def main() -> None:
                 na_position="last",
             ).drop(columns=["_sort"], errors="ignore")
 
-            # === NÚT PREVIEW PDF ===
-            pdf_col, _ = st.columns([1, 4])
-            with pdf_col:
-                default_title = f"{selected_client} - {selected_period}".replace("Tất cả", "Project Summary")
-                if st.button("👁 Preview PDF", type="primary", use_container_width=True, disabled=filtered.empty):
+            # === Action buttons ===
+            default_title = f"{selected_client} - {selected_period}".replace("All", "Project Summary")
+            action_cols = st.columns([1, 1, 4])
+            with action_cols[0]:
+                if st.button("👁 Preview PDF", type="primary", use_container_width=True, key="preview_pdf_table"):
                     st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(display_data, default_title)
                     st.session_state["cloud_pdf_title"] = default_title
+                    st.session_state["pdf_generated_at"] = datetime.now().strftime("%H:%M:%S")
+            with action_cols[1]:
+                if st.button("💾 Save PDF", use_container_width=True, key="save_pdf_table"):
+                    bytes_data = make_pdf_bytes(display_data, default_title)
+                    st.session_state["cloud_pdf_bytes"] = bytes_data
+                    st.session_state["cloud_pdf_title"] = default_title
+                    st.session_state["cloud_pdf_filename"] = f"{default_title}.pdf"
+
+            # Show download if PDF was generated
+            pdf_bytes = st.session_state.get("cloud_pdf_bytes")
+            if pdf_bytes and st.session_state.get("cloud_pdf_filename"):
+                filename = st.session_state["cloud_pdf_filename"]
+                st.download_button(
+                    "⬇️ Download PDF",
+                    data=pdf_bytes,
+                    file_name=filename,
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
 
             st.markdown("---")
 
-            # === BẢNG DỮ LIỆU (chỉ dòng) ===
+            # === BẢNG DỮ LIỆU ===
             render_period_table(display_data)
 
     with tab_gallery:
-        # Sắp xếp gần nhất -> xa nhất
         display_gallery = filtered.copy()
         display_gallery["_sort"] = display_gallery["period_label"].fillna("").map(period_sort_key)
         display_gallery = display_gallery.sort_values(
@@ -613,33 +805,34 @@ def main() -> None:
         render_gallery(display_gallery)
 
     with tab_pdf:
-        st.subheader("Tạo & tải PDF")
-        default_title = f"{selected_client} - {selected_period}".replace("Tất cả", "Project Summary")
-        title = st.text_input("Tiêu đề PDF", value=default_title, key="pdf_title_input")
+        st.subheader("Generate & Download PDF")
+        default_title = f"{selected_client} - {selected_period}".replace("All", "Project Summary")
+        title = st.text_input("PDF Title", value=default_title, key="pdf_title")
 
         pdf_col1, pdf_col2 = st.columns(2)
         with pdf_col1:
-            if st.button("🔄 Tạo PDF", type="primary", use_container_width=True, disabled=filtered.empty):
+            if st.button("🔄 Generate PDF", type="primary", use_container_width=True, key="gen_pdf_tab", disabled=filtered.empty):
                 st.session_state["cloud_pdf_bytes"] = make_pdf_bytes(filtered, title)
                 st.session_state["cloud_pdf_title"] = title
+                st.session_state["cloud_pdf_filename"] = f"{title}.pdf"
         with pdf_col2:
             pdf_bytes = st.session_state.get("cloud_pdf_bytes")
             if pdf_bytes:
-                pdf_title = st.session_state.get("cloud_pdf_title", title)
+                filename = st.session_state.get("cloud_pdf_filename", f"{title}.pdf")
                 st.download_button(
-                    "⬇️ Tải PDF về máy",
+                    "⬇️ Download PDF",
                     data=pdf_bytes,
-                    file_name=f"{pdf_title}.pdf",
+                    file_name=filename,
                     mime="application/pdf",
                     use_container_width=True,
                 )
 
         pdf_bytes = st.session_state.get("cloud_pdf_bytes")
         if pdf_bytes:
-            st.success("✅ PDF đã sẵn sàng. Click nút **Tải PDF về máy** ở trên để tải xuống (Chrome chặn preview inline).")
-            pdf_title = st.session_state.get("cloud_pdf_title", title)
-            st.info(f"📄 File: **{pdf_title}.pdf** · {len(pdf_bytes) / 1024:.1f} KB")
-            # Không hiển thị iframe PDF (Chrome chặn), chỉ cho nút tải
+            st.success(f"✅ PDF generated: **{st.session_state.get('cloud_pdf_title', title)}** · {len(pdf_bytes)/1024:.1f} KB")
+            st.info("💡 Click **Download PDF** to save to your device. (Chrome blocks inline PDF preview.)")
+        else:
+            st.caption("Click **Generate PDF** to create the file.")
 
 
 if __name__ == "__main__":
