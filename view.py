@@ -37,7 +37,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# GLOBAL CSS + MODAL (giống app.py)
+# GLOBAL MODAL + CSS (dùng components.html để đảm bảo script chạy)
 # ============================================================
 st.markdown("""
 <style>
@@ -93,40 +93,17 @@ st.markdown("""
     line-height: 1.4;
     color: #1A1A1A;
 }
-.image-modal {
-    position: fixed; inset: 0; z-index: 999999;
-    display: none; align-items: center; justify-content: center;
-    padding: 24px; background: rgba(0,0,0,0.92);
-    backdrop-filter: blur(8px);
-    cursor: zoom-out;
-}
-.image-modal.is-open { display: flex; }
-.image-modal img {
-    max-width: min(96vw, 1400px);
-    max-height: 92vh;
-    object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 20px 80px rgba(0,0,0,0.6);
-}
-.image-modal-close {
-    position: fixed; top: 20px; right: 20px;
-    width: 48px; height: 48px;
-    border: 0; border-radius: 50%;
-    background: rgba(255,255,255,0.2);
-    color: white; font-size: 30px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000000;
-}
 </style>
+""", unsafe_allow_html=True)
 
-<div id="globalImageModal" class="image-modal" aria-hidden="true">
-    <button type="button" class="image-modal-close" onclick="closeModal()">×</button>
-    <img id="globalImageModalImg" src="" alt="full size" />
+# Embed modal + script using components.html to ensure it runs in iframe
+import streamlit.components.v1 as components
+
+modal_html = """
+<div id="globalImageModal" style="display:none; position:fixed; inset:0; z-index:999999; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,0.92); backdrop-filter:blur(8px); cursor:zoom-out;">
+    <button type="button" onclick="closeModal()" style="position:fixed; top:20px; right:20px; width:48px; height:48px; border:0; border-radius:50%; background:rgba(255,255,255,0.2); color:white; font-size:30px; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:1000000;">×</button>
+    <img id="globalImageModalImg" src="" alt="full size" style="max-width:min(96vw,1400px); max-height:92vh; object-fit:contain; border-radius:8px; box-shadow:0 20px 80px rgba(0,0,0,0.6);" />
 </div>
-
 <script>
 (function() {
     var modal = document.getElementById('globalImageModal');
@@ -135,14 +112,12 @@ st.markdown("""
     window.openModal = function(src) {
         if (!modal || !modalImg) return;
         modalImg.src = src;
-        modal.classList.add('is-open');
-        modal.setAttribute('aria-hidden', 'false');
+        modal.style.display = 'flex';
     };
 
     window.closeModal = function() {
         if (!modal) return;
-        modal.classList.remove('is-open');
-        modal.setAttribute('aria-hidden', 'true');
+        modal.style.display = 'none';
         if (modalImg) setTimeout(function(){ modalImg.src = ''; }, 300);
     };
 
@@ -159,7 +134,8 @@ st.markdown("""
     });
 })();
 </script>
-""", unsafe_allow_html=True)
+"""
+components.html(modal_html, height=0)
 
 
 # ============================================================
@@ -483,6 +459,7 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
         last_period = None
 
         for idx, row in sorted_data.iterrows():
+            # Lấy dữ liệu và escape text (không escape thẻ HTML an toàn)
             project_name = escape(str(row.get("project_name") or ""))
             owner = escape(normalize_text(row.get("owner")))
             desc = escape(normalize_text(row.get("description")))
@@ -500,7 +477,9 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
             if owner:
                 project_parts.append(f"<i>{owner}</i>")
             if desc:
-                project_parts.append(f"<font size=8 color='#6B7280'>{desc.replace(chr(10), '<br/>')}</font>")
+                # Thay newline bằng <br/> đã escape an toàn
+                desc_br = desc.replace(chr(10), "<br/>")
+                project_parts.append(f"<font size=8 color='#6B7280'>{desc_br}</font>")
             project_html = "<br/>".join(project_parts)
             text_for_height = f"{project_name} {owner} {desc}"
 
@@ -582,7 +561,7 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
 
 
 # ============================================================
-# RENDER PERIOD TABLE (có modal ảnh)
+# RENDER PERIOD TABLE
 # ============================================================
 def render_period_table(data: pd.DataFrame) -> None:
     if data.empty:
@@ -608,8 +587,9 @@ def render_period_table(data: pd.DataFrame) -> None:
             if not path:
                 continue
             uri = image_data_uri(path)
+            # Gọi openModal của window.parent để hiện modal
             img_html_parts.append(
-                f'<img class="zoomable" src="{uri}" data-full="{escape(uri, quote=True)}" onclick="window.parent.openModal(\'{escape(uri, quote=True)}\')" />'
+                f'<img class="zoomable" src="{uri}" onclick="window.parent.openModal(\'{escape(uri, quote=True)}\')" />'
             )
         img_html = '<div class="image-grid">' + "".join(img_html_parts) + "</div>" if img_html_parts else ""
 
@@ -832,25 +812,25 @@ def main() -> None:
         key="search_input_widget",
         on_change=lambda: st.session_state.update(search_keyword=st.session_state.search_input_widget)
     )
-    if search_input:
-        suggestions = search_autocomplete_options(data, search_input, limit=20)
-        if suggestions:
-            # Tạo danh sách các giá trị gợi ý (label, value)
-            options = [s[0] for s in suggestions]
-            selected_label = st.sidebar.selectbox(
-                "Gợi ý (chọn để áp dụng)",
-                [""] + options,
-                key="autocomplete_select",
-                label_visibility="collapsed",
-            )
-            if selected_label:
-                # Tìm value tương ứng
-                for label, value in suggestions:
-                    if label == selected_label:
-                        st.session_state.search_keyword = value
-                        st.session_state.search_input_widget = value
-                        st.rerun()
-                        break
+
+    # Lấy gợi ý và hiển thị selectbox
+    suggestions = search_autocomplete_options(data, search_input, limit=20) if search_input else []
+    if suggestions:
+        option_labels = [""] + [s[0] for s in suggestions]
+        selected_label = st.sidebar.selectbox(
+            "Gợi ý (chọn để áp dụng)",
+            option_labels,
+            key="autocomplete_select",
+            label_visibility="collapsed",
+        )
+        if selected_label and selected_label != "":
+            # Tìm value tương ứng
+            for label, value in suggestions:
+                if label == selected_label:
+                    st.session_state.search_keyword = value
+                    st.session_state.search_input_widget = value
+                    st.rerun()
+                    break
 
     keyword = st.session_state.search_keyword
 
@@ -921,8 +901,6 @@ def main() -> None:
                     mime="application/pdf",
                     use_container_width=True,
                 )
-                # Xóa sau khi tải? Có thể giữ lại để tải lại nếu cần, hoặc xóa để tránh rối.
-                # Tôi sẽ giữ lại để người dùng có thể tải lại.
 
     with tab_gallery:
         render_gallery(display_data)
