@@ -447,7 +447,7 @@ def make_pdf_bytes(data: pd.DataFrame, title: str, include_payment: bool = True)
     # Group by period để có header phụ
     last_period = None
     table_rows: list = []
-    row_heights: list = [10 * mm]  # header
+        row_heights: list = []
     for index, row in sorted_data.iterrows():
         project_name = str(row.get("project_name") or "")
         owner = normalize_text(row.get("owner"))
