@@ -83,27 +83,68 @@ def image_paths_from_value(value: object) -> list[str]:
     return [part.strip() for part in raw.split("|") if part.strip()]
 
 
+@st.cache_data(show_spinner=False)
+def _build_upload_filename_index() -> dict[str, list[Path]]:
+    index: dict[str, list[Path]] = {}
+    if not UPLOAD_DIR.exists():
+        return index
+    for p in UPLOAD_DIR.rglob("*"):
+        if p.is_file():
+            index.setdefault(p.name, []).append(p)
+    return index
+
+
 def resolve_image_path(value: object) -> Path | None:
     path_text = normalize_text(value)
     if not path_text:
         return None
 
-    path = Path(path_text)
-    candidates = []
-    if path.is_absolute():
-        candidates.append(path)
-        try:
-            uploads_index = [part.lower() for part in path.parts].index("uploads")
-            candidates.append(UPLOAD_DIR.joinpath(*path.parts[uploads_index + 1 :]))
-        except ValueError:
-            pass
-    else:
-        candidates.extend([APP_DIR / path, UPLOAD_DIR / path, UPLOAD_DIR / path.name])
+    normalized = path_text.replace("\\", "/")
+    path = Path(normalized)
+    filename = path.name
 
+    candidates: list[Path] = []
+
+    # relative path
+    is_windows_style = (
+        len(path.parts) > 0
+        and len(path.parts[0]) >= 2
+        and path.parts[0][-1] == ":"
+    )
+    if not path.is_absolute() and not is_windows_style:
+        candidates.append(APP_DIR / path)
+        candidates.append(UPLOAD_DIR / path)
+        candidates.append(UPLOAD_DIR / filename)
+
+    # absolute path (Windows hoặc Linux) -> lấy phần sau "uploads"
+    try:
+        parts_lower = [p.lower() for p in path.parts]
+        if "uploads" in parts_lower:
+            idx = parts_lower.index("uploads")
+            rel_parts = path.parts[idx + 1:]
+            if rel_parts:
+                candidates.append(UPLOAD_DIR.joinpath(*rel_parts))
+    except (ValueError, IndexError):
+        pass
+
+    # fallback theo tên file
+    if filename:
+        for match in _build_upload_filename_index().get(filename, []):
+            candidates.append(match)
+
+    seen: set[str] = set()
     for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except Exception:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
+
 
 
 def image_data_uri(path: Path) -> str:
