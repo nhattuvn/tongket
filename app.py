@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import base64
+import hashlib
 import json
 import mimetypes
 import subprocess
@@ -1530,7 +1531,8 @@ def save_uploaded_images(uploaded_files: list[object]) -> list[str]:
         st.session_state.saved_uploads = {}
     saved_paths = []
     for uploaded_file in uploaded_files:
-        upload_key = f"{uploaded_file.name}|{uploaded_file.size}"
+        file_bytes = uploaded_file.getvalue()
+        upload_key = hashlib.sha256(file_bytes).hexdigest()
         if upload_key in st.session_state.saved_uploads:
             saved_paths.append(st.session_state.saved_uploads[upload_key])
             continue
@@ -1540,7 +1542,7 @@ def save_uploaded_images(uploaded_files: list[object]) -> list[str]:
             original_suffix = ".jpg"
         original_path = ORIGINAL_UPLOAD_DIR / f"{stem}{original_suffix}"
         thumb_path = THUMB_UPLOAD_DIR / f"{stem}.jpg"
-        with Image.open(uploaded_file) as image:
+        with Image.open(BytesIO(file_bytes)) as image:
             if original_suffix in {".jpg", ".jpeg"}:
                 image.convert("RGB").save(original_path, format="JPEG", quality=95)
             elif original_suffix == ".png":

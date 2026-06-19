@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -185,6 +186,245 @@ def image_paths_from_value(value: object) -> list[str]:
     if not raw:
         return []
     return [part.strip() for part in raw.split("|") if part.strip()]
+
+
+def _render_zoomable_component(body_html: str, height: int) -> None:
+    """Render HTML inside a Streamlit component so click handlers and modal JS work."""
+    html = f"""
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8" />
+        <style>
+            :root {{
+                --bg: #FFFFFF;
+                --surface: #F7F7F5;
+                --border: #E8E8E4;
+                --text: #1A1A1A;
+                --muted: #6B7280;
+                --accent: #B8760A;
+                --primary: #2D2D2D;
+            }}
+            html, body {{
+                margin: 0;
+                padding: 0;
+                background: var(--bg);
+                color: var(--text);
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }}
+            body {{
+                padding: 8px 0 16px;
+            }}
+            .period-shell {{
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                overflow: hidden;
+                background: var(--bg);
+            }}
+            .period-table {{
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+                font-size: 14px;
+            }}
+            .period-table th {{
+                background: var(--primary);
+                color: white;
+                padding: 10px 12px;
+                text-align: left;
+                position: sticky;
+                top: 0;
+                z-index: 3;
+            }}
+            .period-table td {{
+                border-bottom: 1px solid var(--border);
+                padding: 10px 12px;
+                vertical-align: top;
+                line-height: 1.4;
+                overflow-wrap: anywhere;
+            }}
+            .period-table .num {{
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .period-table .amount {{
+                font-weight: 700;
+                color: var(--accent);
+            }}
+            .period-table .owner {{
+                color: var(--muted);
+                font-size: 12px;
+            }}
+            .period-table .desc {{
+                color: var(--muted);
+                font-size: 12px;
+                margin-top: 5px;
+                line-height: 1.35;
+            }}
+            .period-table .total td {{
+                background: var(--surface);
+                font-weight: 700;
+            }}
+            .image-grid {{
+                display: grid;
+                grid-template-columns: repeat(3, 64px);
+                gap: 5px;
+            }}
+            .zoomable {{
+                appearance: none;
+                border: 0;
+                padding: 0;
+                margin: 0;
+                background: transparent;
+                display: block;
+                cursor: zoom-in;
+            }}
+            .table-image img {{
+                width: 64px;
+                height: 64px;
+                object-fit: contain;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--surface);
+                display: block;
+            }}
+            .table-image:hover img {{
+                transform: scale(1.05);
+                box-shadow: 0 0 0 2px var(--accent);
+            }}
+            .gallery-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 14px;
+                padding: 2px;
+            }}
+            .gallery-card {{
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                overflow: hidden;
+                background: white;
+                text-align: left;
+            }}
+            .gallery-img-wrap {{
+                width: 100%;
+                aspect-ratio: 1;
+                background: var(--surface);
+                overflow: hidden;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .gallery-img-wrap img {{
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                display: block;
+            }}
+            .gallery-caption {{
+                padding: 8px 10px;
+                font-size: 12px;
+                line-height: 1.4;
+                color: var(--text);
+            }}
+            .gallery-caption .period {{
+                color: var(--muted);
+                font-size: 11px;
+            }}
+            #imageModal {{
+                display: none;
+                position: fixed;
+                inset: 0;
+                z-index: 2147483647;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+                background: rgba(0, 0, 0, 0.92);
+                cursor: zoom-out;
+            }}
+            #imageModal.open {{
+                display: flex;
+            }}
+            #imageModal img {{
+                max-width: min(96vw, 1400px);
+                max-height: 92vh;
+                object-fit: contain;
+                border-radius: 8px;
+                box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6);
+            }}
+            #closeModal {{
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                width: 48px;
+                height: 48px;
+                border: 0;
+                border-radius: 50%;
+                background: rgba(255, 255, 255, 0.2);
+                color: white;
+                font-size: 30px;
+                line-height: 48px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+        </style>
+    </head>
+    <body>
+        {body_html}
+        <div id="imageModal" aria-hidden="true">
+            <button id="closeModal" type="button" aria-label="Close">×</button>
+            <img id="imageModalImg" src="" alt="full size" />
+        </div>
+        <script>
+            (function() {{
+                var modal = document.getElementById("imageModal");
+                var modalImg = document.getElementById("imageModalImg");
+                var closeBtn = document.getElementById("closeModal");
+
+                function openModal(src) {{
+                    if (!modal || !modalImg || !src) return;
+                    modalImg.src = src;
+                    modal.classList.add("open");
+                }}
+
+                function closeModal() {{
+                    if (!modal) return;
+                    modal.classList.remove("open");
+                    if (modalImg) {{
+                        setTimeout(function() {{ modalImg.src = ""; }}, 200);
+                    }}
+                }}
+
+                document.querySelectorAll(".zoomable[data-full]").forEach(function(el) {{
+                    el.addEventListener("click", function(ev) {{
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        openModal(el.getAttribute("data-full"));
+                    }});
+                }});
+
+                if (closeBtn) {{
+                    closeBtn.addEventListener("click", closeModal);
+                }}
+                if (modal) {{
+                    modal.addEventListener("click", function(ev) {{
+                        if (ev.target === modal) {{
+                            closeModal();
+                        }}
+                    }});
+                }}
+                document.addEventListener("keydown", function(ev) {{
+                    if (ev.key === "Escape") {{
+                        closeModal();
+                    }}
+                }});
+            }})();
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html, height=height, scrolling=True)
 
 
 # ============================================================
@@ -584,12 +824,15 @@ def render_period_table(data: pd.DataFrame) -> None:
         img_html_parts = []
         for path_text in image_paths_from_value(row.get("image_path"))[:8]:
             path = resolve_image_path(path_text)
-            if not path:
+            if not path.exists():
                 continue
             uri = image_data_uri(path)
-            # Gọi openModal của window.parent để hiện modal
+            if not uri:
+                continue
             img_html_parts.append(
-                f'<img class="zoomable" src="{uri}" onclick="window.parent.openModal(\'{escape(uri, quote=True)}\')" />'
+                f'<button type="button" class="zoomable table-image" data-full="{escape(uri, quote=True)}">'
+                f'<img src="{uri}" alt="" />'
+                f'</button>'
             )
         img_html = '<div class="image-grid">' + "".join(img_html_parts) + "</div>" if img_html_parts else ""
 
@@ -613,12 +856,15 @@ def render_period_table(data: pd.DataFrame) -> None:
     )
 
     table_html = f"""
-    <table class="period-table">
-        <thead><tr><th>No</th><th>Project</th><th>Qty</th><th>Unit</th><th>Amount</th><th>Image</th></tr></thead>
-        <tbody>{"".join(rows)}</tbody>
-    </table>
+    <div class="period-shell">
+        <table class="period-table">
+            <thead><tr><th>No</th><th>Project</th><th>Qty</th><th>Unit</th><th>Amount</th><th>Image</th></tr></thead>
+            <tbody>{"".join(rows)}</tbody>
+        </table>
+    </div>
     """
-    st.markdown(table_html, unsafe_allow_html=True)
+    height = max(720, min(1800, 180 + len(sorted_data) * 130))
+    _render_zoomable_component(table_html, height=height)
 
 
 # ============================================================
@@ -637,33 +883,39 @@ def render_gallery(data: pd.DataFrame) -> None:
         na_position="last",
     ).drop(columns=["_sort"], errors="ignore")
 
-    cols = st.columns(4)
-    item_index = 0
+    cards = []
     for _, row in image_rows.iterrows():
         for path_text in image_paths_from_value(row.get("image_path")):
             path = resolve_image_path(path_text)
-            if not path:
+            if not path.exists():
                 continue
             uri = image_data_uri(path)
+            if not uri:
+                continue
             project = str(row.get("project_name") or "")
             period = str(row.get("period_label") or "")
             short_project = project if len(project) <= 32 else project[:30] + "…"
-            with cols[item_index % 4]:
-                st.markdown(
-                    f"""
-                    <div class="gallery-card">
-                        <div class="gallery-img-wrap" onclick="window.parent.openModal('{escape(uri, quote=True)}')">
-                            <img src="{uri}" />
-                        </div>
-                        <div class="gallery-caption">
-                            <strong>{escape(short_project)}</strong><br/>
-                            <span style="color:#888;font-size:11px;">{escape(period)}</span>
-                        </div>
+            cards.append(
+                f"""
+                <button type="button" class="zoomable gallery-card" data-full="{escape(uri, quote=True)}">
+                    <div class="gallery-img-wrap">
+                        <img src="{uri}" alt="" />
                     </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            item_index += 1
+                    <div class="gallery-caption">
+                        <strong>{escape(short_project)}</strong><br/>
+                        <span class="period">{escape(period)}</span>
+                    </div>
+                </button>
+                """
+            )
+
+    if not cards:
+        st.info("No images in the current filter.")
+        return
+
+    gallery_html = f'<div class="gallery-grid">{"".join(cards)}</div>'
+    height = max(720, min(1600, 320 + ((len(cards) - 1) // 4 + 1) * 260))
+    _render_zoomable_component(gallery_html, height=height)
 
 
 # ============================================================
