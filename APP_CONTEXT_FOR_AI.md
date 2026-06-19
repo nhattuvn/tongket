@@ -6,23 +6,23 @@ This file summarizes the local app so another AI/coding agent can quickly unders
 
 `Tong Ket Manager` is a local Streamlit app for managing freelance project summary data from Excel files stored under:
 
-`D:\CODEX CHATGPT\TONG KET`
+`C:\Users\Nhat Tu\GEMINI\TONG KET`
 
 The app imports project rows into a local SQLite database, displays them by company/client and period, supports search/edit/manual entry, imports embedded Excel images, and exports summaries to PDF.
 
 ## Main App Location
 
-- App folder: `D:\CODEX CHATGPT\TONG_KET_APP`
-- Main code: `D:\CODEX CHATGPT\TONG_KET_APP\app.py`
-- Database: `D:\CODEX CHATGPT\TONG_KET_APP\tong_ket.db`
-- Uploaded/imported images: `D:\CODEX CHATGPT\TONG_KET_APP\uploads`
-- PDF exports: `D:\CODEX CHATGPT\TONG_KET_APP\exports`
-- Requirements: `D:\CODEX CHATGPT\TONG_KET_APP\requirements.txt`
+- App folder: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP`
+- Main code: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\app.py`
+- Database: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\tong_ket.db`
+- Uploaded/imported images: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\uploads`
+- PDF exports: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\exports`
+- Requirements: `C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\requirements.txt`
 
 Run:
 
 ```powershell
-cd "D:\CODEX CHATGPT\TONG_KET_APP"
+cd "C:\Users\Nhat Tu\GEMINI\TONG_KET_APP"
 streamlit run app.py
 ```
 
@@ -137,13 +137,13 @@ Embedded Excel images are extracted from worksheet `_images`.
 
 They are saved under:
 
-`D:\CODEX CHATGPT\TONG_KET_APP\uploads\excel_imports\{client}\{workbook_stem}\...jpg`
+`C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\uploads\excel_imports\{client}\{workbook_stem}\...jpg`
 
 Images are mapped to project rows by their Excel anchor row. Multiple images for one project are stored in `image_path` separated by `|`.
 
 Manual uploads are saved under:
 
-`D:\CODEX CHATGPT\TONG_KET_APP\uploads`
+`C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\uploads`
 
 Rendering functions:
 
@@ -235,7 +235,7 @@ PDF includes:
 
 PDF files are saved in:
 
-`D:\CODEX CHATGPT\TONG_KET_APP\exports`
+`C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\exports`
 
 ## Excel Export
 
@@ -247,7 +247,7 @@ Excel export function:
 
 Excel output is saved in:
 
-`D:\CODEX CHATGPT\TONG_KET_APP\exports`
+`C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\exports`
 
 Excel column order matches the current Periods/PDF order:
 
@@ -290,7 +290,7 @@ Known overlapping periods currently handled correctly by company grouping:
 
 A database backup was created before schema/import changes:
 
-`D:\CODEX CHATGPT\TONG_KET_APP\tong_ket.backup_20260523_091039.db`
+`C:\Users\Nhat Tu\GEMINI\TONG_KET_APP\tong_ket.backup_20260523_091039.db`
 
 ## Things Future Agents Should Be Careful About
 
